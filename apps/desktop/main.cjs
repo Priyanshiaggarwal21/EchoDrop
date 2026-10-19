@@ -51,6 +51,17 @@ ipcMain.handle('workspace:restore', async (event) => {
   return start();
 });
 ipcMain.handle('workspace:start', (event) => { trusted(event); return start(); });
+ipcMain.handle('workspace:pairing', async (event, route, body) => {
+  trusted(event);
+  const id = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+  const read = route === '/host/state' && body === undefined;
+  const write = typeof route === 'string' && new RegExp(`^/host/(joins/${id}/(approve|reject)|sessions/${id}/revoke)$`).test(route)
+    && body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length === 0;
+  if (!service || (!read && !write)) throw new Error('Unsupported host operation.');
+  const response = await fetch(origin + route, { method: read ? 'GET' : 'POST', headers: { Cookie: credential, 'Content-Type': 'application/json', 'X-EchoDrop-Request': '1' }, ...(write ? { body: '{}' } : {}), signal: AbortSignal.timeout(10000) });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+});
 ipcMain.handle('workspace:transfer', async (event, value) => {
   trusted(event);
   if (!service) throw new Error('Create your workspace first.');
@@ -97,7 +108,7 @@ ipcMain.handle('workspace:open', async (event, area) => {
     previewWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     previewWindow.webContents.on('will-navigate', event => event.preventDefault());
   });
-  await client.loadURL(origin + (area === 'files' ? '/' : '/host'));
+  await client.loadURL(origin + (area === 'files' ? '/' : area === 'devices' ? '/host/pairing' : '/host'));
 });
 if (!app.requestSingleInstanceLock()) app.quit();
 else {

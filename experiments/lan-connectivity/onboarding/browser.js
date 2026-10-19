@@ -98,7 +98,7 @@
     if (!Audio || !root.Worker || !root.WebAssembly) throw new Error('Experimental audio is unsupported. Use QR/manual.');
     return new Audio({ sampleRate: 48000 });
   }
-  async function transmit(payload, onStatus, signal) {
+  async function transmit(payload, onStatus, signal, onEvent = () => {}) {
     EchoDropBootstrap.parse(payload);
     const context = audioContext(), codec = worker();
     let source, stopped = false;
@@ -115,13 +115,14 @@
       source = context.createBufferSource(); source.buffer = buffer;
       const gain = context.createGain(); gain.gain.value = 0.5; // ggwave already encodes at 10% amplitude.
       source.connect(gain); gain.connect(context.destination);
-      source.onended = () => { stop(); onStatus('Experimental audio sent; reception is not confirmed.'); };
+      source.onended = () => { if (stopped) return; stop(); onEvent('Sent · reception unconfirmed'); onStatus('Experimental audio sent; reception is not confirmed.'); };
       source.start();
-      onStatus('Sending experimental invitation quietly. Stop is available.');
+      onEvent('Transmitting');
+      onStatus('Sending experimental audible invitation. Stop is available.');
       return stop;
     } catch (error) { stop(); throw error; }
   }
-  async function listen(onPayload, onStatus, signal) {
+  async function listen(onPayload, onStatus, signal, onEvent = () => {}) {
     if (!mediaAvailable()) throw new Error('Microphone unavailable on HTTP LAN (including Android). Use manual entry or QR.');
     const context = audioContext(), codec = worker();
     let stream, recorder, input, timer, stopped = false;
@@ -147,11 +148,12 @@
         if (stopped) return;
         const samples = new Float32Array(event.inputBuffer.getChannelData(0)).buffer;
         codec.call('decode', { samples }).then((result) => {
-          if (result.payload && !stopped) { stop(); onPayload(result.payload); }
-        }).catch((error) => { if (!stopped) { stop(); onStatus(error.message); } });
+          if (result.payload && !stopped) { stop(); onEvent('Signal decoded · confirm invitation'); onPayload(result.payload); }
+        }).catch((error) => { if (!stopped) { stop(); onEvent('Failed'); onStatus(error.message); } });
       };
       input.connect(recorder); recorder.connect(context.destination);
-      timer = setTimeout(() => { stop(); onStatus('No acoustic invitation decoded in 30 seconds. Use QR/manual.'); }, 30000);
+      timer = setTimeout(() => { stop(); onEvent('Timed out'); onStatus('No acoustic invitation decoded in 30 seconds. Use QR/manual.'); }, 30000);
+      onEvent('Listening');
       onStatus('Experimental microphone listening (30 seconds maximum).');
       return stop;
     } catch (error) { stop(); throw error; }

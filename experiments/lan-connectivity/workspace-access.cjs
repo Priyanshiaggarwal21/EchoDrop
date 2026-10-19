@@ -2,6 +2,7 @@ const { randomBytes } = require('node:crypto');
 const { createWorkspaceAuth } = require('../../packages/core/workspace-auth.cjs');
 const onboarding = require('./onboarding-assets.cjs');
 const { createLivePreview } = require('../../packages/core/live-preview.cjs');
+const { workspaceUI } = require('./workspace-ui.cjs');
 
 const failure = (status, message) => Object.assign(new Error(message), { status });
 const loopback = (address) => address === '::1' || /^127\./.test((address || '').replace(/^::ffff:/, ''));
@@ -75,6 +76,7 @@ ${script}
 
 function hostPage(response, nonce) {
   page(response, nonce, 'EchoDrop host', `
+<p><a href="/host/pairing">Open Devices, QR/manual invitations and ChirpPair (after unlocking)</a></p>
 <form id="login"><label>Host code from the server terminal <input id="code" type="password" autocomplete="off" required></label><button>Unlock host controls</button></form>
 <p>Host controls work only on this computer via localhost. Device labels are unverified: confirm the request ID with the person before approving.</p>
 <label>Host LAN URL <select id="lan-url"></select></label>
@@ -82,7 +84,7 @@ function hostPage(response, nonce) {
 <canvas id="qr" aria-label="Invitation QR code" hidden></canvas>
 <p>Scan with your phone camera, or open the host LAN URL and enter the invitation token. QR and sound only carry the host URL and invitation token.</p>
 <p>Acoustic is experimental. Anyone nearby may hear the invitation. Lower device volume first; do not use headphones. Reception is not confirmed.</p>
-<button id="send-audio" disabled>Send invitation quietly (experimental)</button><button id="stop-audio">Stop audio</button>
+<button id="send-audio" disabled>Send audible invitation (experimental)</button><button id="stop-audio">Stop audio</button>
 <button id="refresh">Refresh requests and devices</button><ul id="requests"></ul><ul id="devices"></ul>
 <form id="preview-start"><label>Local static project directory <input id="project-directory" required></label><button>Start LivePreview</button></form>
 <button id="preview-stop">Stop LivePreview</button><p id="preview-state"></p>
@@ -293,7 +295,14 @@ function createWorkspaceAccess({ auth = createWorkspaceAuth(), preview = createL
       const jar = cookies(request);
       const localHost = loopback(request.socket.remoteAddress) && loopback(request.socket.localAddress);
       if (request.method === 'GET' && request.url === '/health') return false;
-      if (request.method === 'GET' && request.url === '/join') { joinPage(response, nonce); return true; }
+      if (request.method === 'GET' && request.url === '/join') {
+        const html = await workspaceUI(nonce, '', 'join');
+        if (html) {
+          response.setHeader('Content-Security-Policy', response.getHeader('Content-Security-Policy') + `; style-src 'nonce-${nonce}'`);
+          response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); response.end(html);
+        } else joinPage(response, nonce);
+        return true;
+      }
       if (request.url === '/host' && request.method === 'GET') {
         if (!localHost) throw failure(403, 'Host controls are local-only.');
         hostPage(response, nonce); return true;
@@ -307,6 +316,15 @@ function createWorkspaceAccess({ auth = createWorkspaceAuth(), preview = createL
       }
       if (request.url.startsWith('/host/')) {
         if (!localHost) throw failure(403, 'Host controls are local-only.');
+        if (request.url === '/host/pairing' && request.method === 'GET') {
+          auth.manage(jar.echo_host);
+          const html = await workspaceUI(nonce, '', 'host');
+          if (html) {
+            response.setHeader('Content-Security-Policy', response.getHeader('Content-Security-Policy') + `; style-src 'nonce-${nonce}'`);
+            response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); response.end(html);
+          } else hostPage(response, nonce);
+          return true;
+        }
         if (request.url === '/host/state' && request.method === 'GET') {
           json(response, { ...auth.manage(jar.echo_host), lanUrls: onboarding.lanOrigins(request.socket.localPort), preview: preview.status() }); return true;
         }
