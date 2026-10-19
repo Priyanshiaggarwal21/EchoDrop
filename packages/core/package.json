@@ -1,0 +1,6 @@
+{
+  "name": "@echodrop/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Reserved for shared types and protocol contracts"
+}
