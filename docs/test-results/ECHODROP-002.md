@@ -49,3 +49,10 @@ No install, build, TypeScript compilation, unit tests, UI tests, device tests, n
 ## Proposed next steps
 
 Review the foundation, define device-based acceptance criteria, and scope the LAN connectivity experiment. Add tooling and a root lockfile only when actual implementation needs them, after license review. Obtain owner approval before any commit or push.
+
+## TEST-001 — Legacy onboarding markup
+
+Status: Pending
+Milestone: 3
+Result: Focused pairing/security checks passed 15/16. The remaining legacy onboarding test expects outdated `/join` markup after the React migration; an actual onboarding regression is not confirmed.
+Next step: Include in the post-Milestone-4 regression pass.
