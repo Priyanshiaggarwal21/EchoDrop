@@ -116,7 +116,7 @@ test('expired and replayed QR/manual invitations cannot bypass validation', asyn
   assert.equal(second.status, 401); await second.text();
 });
 
-test('join-page fragment handling, cross-host confirmation and HTTP media fallbacks', async (t) => {
+test('React join page preserves fragment handling, cross-host confirmation and HTTP media fallbacks', async (t) => {
   const api = await fixture(t);
   const invitation = await api.invite();
   const response = await api.request('/join');
@@ -124,9 +124,8 @@ test('join-page fragment handling, cross-host confirmation and HTTP media fallba
   const html = await response.text();
   assert(!response.headers.get('content-security-policy').includes('unsafe-eval'));
   const other = bootstrap.create('http://10.0.0.4:3000', invitation.token);
-  assert.match(html, /id="token"/);
-  assert.match(html, /id="camera"/);
-  assert.match(html, /id="microphone"/);
+  assert.match(html, /id="omni-root" data-page="join"/);
+  assert.match(html, /src="\/onboarding\/browser\.js"/);
   assert.match(html, /onboarding\/browser\.js/);
   assert.equal(bootstrap.parse(other).host, 'http://10.0.0.4:3000');
   assert.equal(bootstrap.parse(other).token, invitation.token);

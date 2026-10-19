@@ -52,7 +52,7 @@ Review the foundation, define device-based acceptance criteria, and scope the LA
 
 ## TEST-001 — Legacy onboarding markup
 
-Status: Pending
-Milestone: 3
-Result: Focused pairing/security checks passed 15/16. The remaining legacy onboarding test expects outdated `/join` markup after the React migration; an actual onboarding regression is not confirmed.
-Next step: Include in the post-Milestone-4 regression pass.
+Status: Resolved
+Milestone: 4
+Result: The onboarding test now asserts the React `/join` mount point and current bundled onboarding entry while retaining the fragment, cross-host, CSP, and HTTP fallback/security assertions. The focused onboarding suite passes 6/6.
+Next step: None.
