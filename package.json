@@ -1,0 +1,15 @@
+{
+  "name": "echodrop",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": { "dev": "npm run dev -w @echodrop/web", "build": "npm run build -w @echodrop/web", "desktop": "npm run build && npm start -w @echodrop/desktop" },
+  "description": "EchoDrop repository foundation",
+  "workspaces": [
+    "apps/desktop",
+    "apps/web",
+    "packages/core",
+    "packages/transfer",
+    "experiments/lan-connectivity",
+    "experiments/acoustic-pairing"
+  ]
+}
