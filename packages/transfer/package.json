@@ -1,0 +1,6 @@
+{
+  "name": "@echodrop/transfer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Reserved for the future resumable transfer engine"
+}

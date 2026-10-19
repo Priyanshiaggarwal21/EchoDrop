@@ -1,0 +1,14 @@
+{
+  "name": "@echodrop/experiment-lan-connectivity",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Isolated future LAN connectivity spike",
+  "scripts": {
+    "start": "node server.cjs"
+  },
+  "dependencies": {
+    "ggwave": "0.4.0",
+    "jsqr": "1.4.0",
+    "qrcode-generator": "2.0.4"
+  }
+}
