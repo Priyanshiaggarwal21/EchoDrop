@@ -38,3 +38,26 @@ Relative planning days, not completed work or delivery promises. Only checked it
 - [ ] Select the next small implementation task and its validation plan.
 - [ ] Review tooling licenses and Windows compatibility before adding dependencies.
 - [ ] Seek owner approval before committing or pushing.
+
+## Verified LAN milestone checkpoint — 2026-10-20
+
+The owner verified the current implementation on real devices: a Windows host connected to an Android client over the local network, QR joining, approved-device removal, and normal file transfer all worked. These are owner-reported real-device results, not simulated browser or loopback results.
+
+Included in this checkpoint:
+
+- The existing website and workspace UI, including the LAN diagnostics/help surface.
+- LAN interface discovery, current-port URLs, QR/manual joining, host approval, device removal, and normal authenticated file transfer.
+- Focused automated coverage for LAN socket reachability, QR/manual onboarding, transfer integrity/resume/restart behavior, LivePreview, and workspace authorization.
+
+Not verified by this checkpoint:
+
+- Resume behavior on a real Windows-to-Android interruption/reconnect.
+- Acoustic pairing, including microphone/hardware capture and the bundled ggwave digital PCM experiment.
+- Electron/Android packaging or distribution.
+- Secure transport beyond the documented trusted-network, plain-HTTP boundary.
+
+Validation run from the repository root:
+
+- `npm run build` — passed TypeScript validation and both Vite production builds.
+- `node --test experiments/lan-connectivity/chunk-upload.test.cjs experiments/lan-connectivity/lan-connectivity.test.cjs experiments/lan-connectivity/live-preview.test.cjs experiments/lan-connectivity/workspace-auth.test.cjs` — passed.
+- `node --test experiments/lan-connectivity/onboarding.test.cjs` — 5 non-acoustic onboarding checks passed; the separate bundled ggwave digital-PCM check was observed to fail and remains outside the passing milestone gate.

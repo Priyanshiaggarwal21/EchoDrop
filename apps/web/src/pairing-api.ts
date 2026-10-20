@@ -1,7 +1,12 @@
 export type PairAPI = <T>(path: string, body?: Record<string, string>) => Promise<T>;
-export type HostState = { requests: { id: string; deviceName: string; expiresAt: number }[]; devices: { id: string; deviceName: string; expiresAt: number }[]; lanUrls: string[] };
+export type HostState = { requests: { id: string; deviceName: string; expiresAt: number }[]; devices: { id: string; deviceName: string; expiresAt: number }[]; lanUrls: string[]; lanInterfaces?: { name: string; address: string; origin: string; linkLocal: boolean }[] };
 export const pairingAPI: PairAPI = async (path, body) => {
-  const response = await fetch(path, body === undefined ? { signal: AbortSignal.timeout(10000) } : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-EchoDrop-Request': '1' }, body: JSON.stringify(body), signal: AbortSignal.timeout(10000) });
+  let response: Response;
+  try {
+    response = await fetch(path, body === undefined ? { signal: AbortSignal.timeout(10000) } : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-EchoDrop-Request': '1' }, body: JSON.stringify(body), signal: AbortSignal.timeout(10000) });
+  } catch {
+    throw new Error('The host did not respond. Keep EchoDrop open and both devices on the same trusted network. Check the current host IP and port, Windows firewall and guest Wi-Fi isolation. This browser cannot determine which caused the failure.');
+  }
   if (!response.ok) throw new Error(await response.text() || `Request failed (${response.status}).`);
   return response.json();
 };

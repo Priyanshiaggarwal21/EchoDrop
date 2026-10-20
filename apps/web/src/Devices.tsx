@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { LanDiagnostics } from './LanDiagnostics';
 import { type HostState, type PairAPI } from './pairing-api';
 import './pairing.css';
 export function Devices({ api, invite }: { api: PairAPI; invite: () => void }) {
@@ -15,6 +16,7 @@ export function Devices({ api, invite }: { api: PairAPI; invite: () => void }) {
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   return <section className="device-panel"><div className="section-intro"><p>People you approve.<br/>A space you share.</p><button className="button" onClick={invite}>Invite a device <span aria-hidden="true">↗</span></button></div>
+    <LanDiagnostics/>
     <p className="fine">Device labels are self-reported. Compare the full request ID with the person before approval. An approved session does not confirm that a device is online.</p>
     {error && <p className="error" role="alert">{error} <button className="text-link" disabled={busy} onClick={() => void refresh()}>Retry</button></p>}<p role="status">{notice}</p>
     {!state && !error && <p role="status">Checking host sessions…</p>}

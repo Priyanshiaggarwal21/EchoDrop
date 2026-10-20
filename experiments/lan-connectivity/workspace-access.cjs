@@ -112,10 +112,14 @@ async function refresh() {
   const select = document.getElementById('lan-url');
   const previous = select.value;
   select.replaceChildren();
+  const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = 'Select the adapter on your phone network'; select.appendChild(placeholder);
   for (const origin of data.lanUrls) {
-    const option = document.createElement('option'); option.value = origin; option.textContent = origin; select.appendChild(option);
+    const adapter = (data.lanInterfaces || []).find(item => item.origin === origin);
+    const option = document.createElement('option'); option.value = origin; option.textContent = (adapter ? adapter.name + ' | ' : '') + origin + (adapter?.linkLocal ? ' | link-local: check Wi-Fi addressing' : ''); select.appendChild(option);
   }
   if (data.lanUrls.includes(previous)) select.value = previous;
+  else if (data.lanUrls.length === 1 && !data.lanInterfaces?.[0]?.linkLocal) select.value = data.lanUrls[0];
+  if (previous !== select.value && invitationPayload) clearInvitation();
   for (const kind of ['requests', 'devices']) {
     const list = document.getElementById(kind);
     list.replaceChildren();
@@ -144,6 +148,7 @@ document.getElementById('login').onsubmit = async (event) => {
   try { await api('/auth/host', { token }); await refresh(); }
   catch (error) { status.textContent = error.message; }
 };
+document.getElementById('lan-url').onchange = () => { if (invitationPayload) clearInvitation(); };
 document.getElementById('invite').onclick = async () => {
   try {
     const host = EchoDropBootstrap.origin(document.getElementById('lan-url').value);
@@ -326,7 +331,9 @@ function createWorkspaceAccess({ auth = createWorkspaceAuth(), preview = createL
           return true;
         }
         if (request.url === '/host/state' && request.method === 'GET') {
-          json(response, { ...auth.manage(jar.echo_host), lanUrls: onboarding.lanOrigins(request.socket.localPort), preview: preview.status() }); return true;
+          const state = auth.manage(jar.echo_host);
+          const lanInterfaces = onboarding.lanInterfaces(request.socket.localPort);
+          json(response, { ...state, lanUrls: lanInterfaces.map(entry => entry.origin), lanInterfaces, preview: preview.status() }); return true;
         }
         if (request.method === 'POST' && ['/host/preview/start', '/host/preview/stop'].includes(request.url)) {
           auth.manage(jar.echo_host);

@@ -32,12 +32,20 @@ async function serve(request, response) {
   response.end(source);
   return true;
 }
-function lanOrigins(port) {
-  const origins = new Set();
-  for (const entries of Object.values(os.networkInterfaces())) for (const entry of entries || []) {
-    if (entry.internal || entry.family !== 'IPv4') continue;
-    try { origins.add(bootstrap.origin(`http://${entry.address}:${port}`)); } catch { /* Not a private IPv4 LAN interface. */ }
+function lanInterfaces(port, interfaces = os.networkInterfaces()) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid listening port.');
+  const addresses = new Map();
+  for (const [name, entries] of Object.entries(interfaces)) for (const entry of entries || []) {
+    if (entry.internal || !['IPv4', 4].includes(entry.family)) continue;
+    try {
+      const origin = bootstrap.origin(`http://${entry.address}:${port}`);
+      if (!addresses.has(origin)) addresses.set(origin, {
+        name, address: entry.address, origin,
+        linkLocal: entry.address.startsWith('169.254.'),
+      });
+    } catch { /* Not a supported private IPv4 interface. */ }
   }
-  return [...origins];
+  return [...addresses.values()];
 }
-module.exports = { serve, lanOrigins };
+function lanOrigins(port) { return lanInterfaces(port).map(entry => entry.origin); }
+module.exports = { serve, lanOrigins, lanInterfaces };

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { LanDiagnostics } from './LanDiagnostics';
 import { Devices } from './Devices';
 import { pairingAPI as api, type HostState } from './pairing-api';
 import './pairing.css';
@@ -43,6 +44,9 @@ function Invite() {
   const [method, setMethod] = useState<Method>('QR code');
   const [hosts, setHosts] = useState<string[]>([]);
   const [host, setHost] = useState('');
+  const hostRef = useRef('');
+  const [interfaces, setInterfaces] = useState<NonNullable<HostState['lanInterfaces']>>([]);
+  function selectHost(value: string) { hostRef.current = value; setHost(value); setInvitation(null); }
   const [invitation, setInvitation] = useState<{ token: string; expiresAt: number } | null>(null);
   const [now, setNow] = useState(Date.now());
   const [notice, setNotice] = useState('');
@@ -50,10 +54,22 @@ function Invite() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const valid = invitation && invitation.expiresAt > now;
   const payload = valid && host ? boot().create(host, invitation.token) : '';
-  useEffect(() => { api<HostState>('/host/state').then(state => { setHosts(state.lanUrls); setHost(state.lanUrls[0] || ''); }).catch(e => setNotice(e.message)); const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
+  async function refreshAddresses() {
+    try {
+      const state = await api<HostState>('/host/state');
+      setHosts(state.lanUrls); setInterfaces(state.lanInterfaces || []);
+      if (!state.lanUrls.includes(hostRef.current)) {
+        const changed = Boolean(hostRef.current);
+        selectHost(state.lanUrls.length === 1 && !state.lanInterfaces?.[0]?.linkLocal ? state.lanUrls[0]! : '');
+        if (changed) setNotice('The selected address is no longer available. Confirm the current Wi-Fi adapter and create a fresh invitation.');
+      }
+      return state;
+    } catch (e) { setHosts([]); setInterfaces([]); selectHost(''); setNotice((e as Error).message); return null; }
+  }
+  useEffect(() => { void refreshAddresses(); const timer = setInterval(() => setNow(Date.now()), 1000); const network = setInterval(() => void refreshAddresses(), 10000); return () => { clearInterval(timer); clearInterval(network); }; }, []);
   useEffect(() => { if (canvas.current && payload && method === 'QR code') { try { runtime().drawQR(canvas.current, payload); } catch (e) { setNotice((e as Error).message); } } }, [payload, method]);
-  async function create() { setBusy(true); setInvitation(null); try { setInvitation(await api('/host/invitations', {})); setNow(Date.now()); setNotice('Invitation created. Single use, valid for two minutes; host approval is still required.'); } catch (e) { setNotice((e as Error).message); } finally { setBusy(false); } }
-  return <section className="invite-panel" id="invite"><p className="eyebrow">BRING ANOTHER DEVICE INTO YOUR SPACE</p><h2>A welcome, on your terms.</h2><label>Host LAN address<select value={host} onChange={e => { setHost(e.target.value); setInvitation(null); }}>{hosts.map(url => <option key={url}>{url}</option>)}</select></label>{!hosts.length && <p className="error">No private IPv4 LAN address is available. Connect the host to the same trusted network as your other device, then reopen this page.</p>}<Tabs value={method} change={setMethod}/>
+  async function create() { setBusy(true); setInvitation(null); try { const selected = hostRef.current; const network = await refreshAddresses(); if (!network || !selected || !network.lanUrls.includes(selected)) throw new Error('Select a current host Wi-Fi address before creating an invitation.'); const fresh = await api<{ token: string; expiresAt: number }>('/host/invitations', {}); if (hostRef.current !== selected) throw new Error('The network address changed while creating the invitation. Confirm the current address and try again.'); setInvitation(fresh); setNow(Date.now()); setNotice('Invitation created. Single use, valid for two minutes; host approval is still required.'); } catch (e) { setNotice((e as Error).message); } finally { setBusy(false); } }
+  return <section className="invite-panel" id="invite"><p className="eyebrow">BRING ANOTHER DEVICE INTO YOUR SPACE</p><h2>A welcome, on your terms.</h2><label>Host LAN address<select disabled={busy} value={host} onChange={e => selectHost(e.target.value)}><option value="">Select the adapter on your phone’s network</option>{hosts.map(url => <option key={url} value={url}>{interfaces.find(item => item.origin === url)?.name || 'LAN'} · {url}{interfaces.find(item => item.origin === url)?.linkLocal ? ' · link-local, check Wi-Fi addressing' : ''}</option>)}</select></label><button className="text-link" disabled={busy} onClick={() => void refreshAddresses()}>Refresh host addresses</button><LanDiagnostics origin={host || undefined}/>{!hosts.length && <p className="error">No private IPv4 LAN address is available. Connect the host to the same trusted network as your other device, then refresh host addresses.</p>}<Tabs value={method} change={setMethod}/>
     <div className="invitation-meta"><button className="button" disabled={busy || !host} onClick={() => void create()}>{busy ? 'Creating invitation…' : invitation ? 'Create a fresh invitation' : 'Create invitation'}</button><span role="status">{invitation ? valid ? `${Math.ceil((invitation.expiresAt - now) / 1000)}s until expiry · single use` : 'Invitation expired' : 'No active invitation'}</span></div>
     {method === 'QR code' && <div className="qr-panel">{payload ? <canvas ref={canvas} aria-label="Single-use workspace invitation QR code"/> : <p>Create an invitation to show its QR code.</p>}<p>Scan with your phone camera, then confirm the host and request access.</p></div>}
     {method === 'Manual' && <div className="manual-invite"><p>On the other device, open the address below and enter the invitation token.</p><label>Join address<input readOnly value={host ? host + '/join' : ''} onFocus={e => e.target.select()}/></label><label>Invitation token<textarea readOnly value={payload && invitation ? invitation.token : ''} onFocus={e => e.target.select()} rows={3}/></label><p className="fine">Share only with the person you intend to invite. Creating a fresh invitation does not revoke earlier ones; each expires independently.</p></div>}
@@ -64,7 +80,7 @@ function Invite() {
 export function PairingPage({ host }: { host: boolean }) {
   const [theme, setTheme] = useState(() => { try { const value = localStorage.getItem('echodrop-theme'); return value === 'light' || value === 'dark' ? value : 'system'; } catch { return 'system'; } });
   useEffect(() => { const media = matchMedia('(prefers-color-scheme: dark)'); const apply = () => { document.documentElement.dataset.theme = theme === 'system' ? media.matches ? 'dark' : 'light' : theme; }; apply(); media.addEventListener('change', apply); try { localStorage.setItem('echodrop-theme', theme); } catch {} return () => media.removeEventListener('change', apply); }, [theme]);
-  return <><header className="topbar"><a className="wordmark" href="/">echodrop.</a><span className="workspace-label">{host ? 'DEVICES & INVITATIONS' : 'JOIN A LOCAL WORKSPACE'}</span><div className="header-end"><label className="theme-control"><span>Appearance</span><select aria-label="Appearance" value={theme} onChange={e => setTheme(e.target.value)}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></header><main className="pair-page">{host ? <><div className="section-heading"><h1>Make a connection.</h1><a className="text-link" href="/host">Advanced host / LivePreview controls</a></div><Devices api={api} invite={() => { document.getElementById('invite')?.scrollIntoView(); document.querySelector<HTMLSelectElement>('#invite select')?.focus(); }}/><Invite/></> : <Join/>}<p className="fine">Same local network. Host approval required. Plain HTTP is not encrypted; use a trusted network.</p><a className="text-link" href="/onboarding/licenses.txt">Third-party notices</a></main></>;
+  return <><header className="topbar"><a className="wordmark" href="/">echodrop.</a><span className="workspace-label">{host ? 'DEVICES & INVITATIONS' : 'JOIN A LOCAL WORKSPACE'}</span><div className="header-end"><label className="theme-control"><span>Appearance</span><select aria-label="Appearance" value={theme} onChange={e => setTheme(e.target.value)}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></header><main className="pair-page">{host ? <><div className="section-heading"><h1>Make a connection.</h1><a className="text-link" href="/host">Advanced host / LivePreview controls</a></div><Devices api={api} invite={() => { document.getElementById('invite')?.scrollIntoView(); document.querySelector<HTMLSelectElement>('#invite select')?.focus(); }}/><Invite/></> : <><Join/><LanDiagnostics origin={location.origin}/></>}<p className="fine">Same local network. Host approval required. Plain HTTP is not encrypted; use a trusted network.</p><a className="text-link" href="/onboarding/licenses.txt">Third-party notices</a></main></>;
 }
 function Join() {
   const [method, setMethod] = useState<Method>('QR code');
