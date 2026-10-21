@@ -31,6 +31,11 @@ function contentDisposition(name) {
 
 async function handle(request, response) {
   if (await access.handle(request, response)) return;
+  if (request.method === 'GET' && request.url === '/project.mjs') {
+    response.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
+    response.end(await fs.readFile(path.join(__dirname, '../../packages/transfer/project.mjs'), 'utf8'));
+    return;
+  }
   if (request.method === 'GET' && request.url === '/secret-scan.mjs') {
     response.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
     response.end(await fs.readFile(path.join(__dirname, '../../packages/transfer/secret-scan.mjs'), 'utf8'));

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { bytes, fingerprint, newTransferId, LIMIT, request, sha256File, TransferError, type Transfer, type Transport } from './transfer-api';
 import './omnidrop.css';
+import { ProjectShare } from './ProjectShare';
 import { withSharingCheck, type ScanResult } from '../../../packages/transfer/secret-scan.mjs';
 
 type Phase = 'Checking' | 'Preparing' | 'Uploading' | 'Verifying' | 'Completed' | 'Interrupted' | 'Resumable' | 'Failed';
@@ -89,6 +90,7 @@ export function OmniDrop({
   const [files, setFiles] = useState<{ name: string; path: string }[]>([]);
   const [filesLoaded, setFilesLoaded] = useState(false);
   const [fileError, setFileError] = useState('');
+  const [receiveRequest, setReceiveRequest] = useState<{ path: string } | null>(null);
   const [query, setQuery] = useState('');
   const [checking, setChecking] = useState(false);
   const alive = useRef(true);
@@ -336,6 +338,8 @@ export function OmniDrop({
       )}
 
       {/* ── Files view ── */}
+      <div hidden={view !== 'Files'}><ProjectShare disabled={active || checking} receiveRequest={receiveRequest} onShare={file => { setSelected(file); resumeTarget.current = undefined; void send(file); }} /></div>
+
       {(view === 'Files' || selected) && (
         <>
           {/* Drop zone / selected file */}
@@ -446,6 +450,8 @@ export function OmniDrop({
                           </td>
                           <td className="col-muted">{ext}</td>
                           <td className="col-action">
+                            {f.name.toLowerCase().endsWith('.echoproject') && window.echoDesktop?.project && <button disabled={active || checking} onClick={() => setReceiveRequest({ path: f.path })}>Receive project</button>}
+
                             {download
                               ? <button onClick={() => void getFile(f.path)}>Download</button>
                               : <a href={f.path} download={f.name}>Download</a>

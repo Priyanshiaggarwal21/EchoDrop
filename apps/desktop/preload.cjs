@@ -7,5 +7,6 @@ contextBridge.exposeInMainWorld('echoDesktop', {
   transfer: (request) => ipcRenderer.invoke('workspace:transfer', request),
   download: (path) => ipcRenderer.invoke('workspace:download', path),
   pairing: (path, body) => ipcRenderer.invoke('workspace:pairing', path, body),
+  project: (action, value) => ipcRenderer.invoke('workspace:project', action, value),
   preview: (action, kind) => ipcRenderer.invoke('workspace:preview', action, kind),
 });

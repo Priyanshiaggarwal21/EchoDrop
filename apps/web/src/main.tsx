@@ -30,6 +30,7 @@ declare global {
       download(path: string): Promise<void>;
       pairing: PairAPI;
       preview: PreviewBridge;
+      project: import('./ProjectShare').ProjectBridge;
     };
   }
 }

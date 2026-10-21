@@ -1,3 +1,4 @@
+import { parseProject, decodeBytes, PACKAGE_LIMIT } from './project.mjs';
 // Local heuristics only. Results contain categories, never matched values or excerpts.
 export const SCAN_LIMIT = 1024 * 1024;
 const READ_TIMEOUT = 3000;
@@ -10,11 +11,24 @@ const rules = [
   ['Google API key', /\bAIza[A-Za-z0-9_-]{35}\b/],
 ];
 
-export async function scanFile(file) {
+export async function scanFile(file, projectMember = false) {
   const categories = new Set();
   const limitations = [];
   let timer;
   try {
+    if (file.name.toLowerCase().endsWith('.echoproject')) {
+      if (projectMember || file.size > PACKAGE_LIMIT) throw new Error('Unsupported nested or oversized project.');
+      const project = parseProject(await Promise.race([
+        file.text(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), READ_TIMEOUT); }),
+      ]));
+      clearTimeout(timer);
+      const findings = await scanProject(project);
+      for (const finding of findings) {
+        for (const category of finding.result.categories) categories.add(finding.path + ': ' + category);
+        for (const limitation of finding.result.limitations) limitations.push(finding.path + ': ' + limitation);
+      }
+      return { categories: [...categories], limitations, needsConfirmation: categories.size > 0 || limitations.length > 0 };
+    }
     const name = file.name.split(/[\\/]/).pop().toLowerCase();
     if (/^\.env(?:\.|$)/.test(name)) categories.add('Environment configuration');
     if (/^(?:id_(?:rsa|dsa|ecdsa|ed25519)(?!\.pub$)(?:\..*)?|.*\.(?:key|pem|p12|pfx|jks|keystore))$/.test(name)) categories.add('Private key or keystore file');
@@ -44,4 +58,14 @@ export async function withSharingCheck(file, confirm, proceed) {
   if (result.needsConfirmation && await confirm(result) !== true) return false;
   await proceed();
   return true;
+}
+
+export async function scanProject(project) {
+  const findings = [];
+  for (const entry of project.files) {
+    const result = await scanFile(new File([decodeBytes(entry.data)], entry.path), true);
+    if (result.needsConfirmation) findings.push({ path: entry.path, result });
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  return findings;
 }

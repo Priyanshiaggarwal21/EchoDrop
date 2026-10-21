@@ -1,0 +1,15 @@
+export type Project = { format: 'echodrop-project'; version: 1; name: string; files: { path: string; data: string }[] };
+export type Report = { facts: string[]; unknowns: string[]; guidance: string[] };
+export type ImportResult = { project: Project; excluded: string[] };
+export const PROJECT_LIMIT: number, PACKAGE_LIMIT: number, FILE_LIMIT: number, COUNT_LIMIT: number;
+export const EXCLUDED: string[];
+export function safePath(value: string): string;
+export function excludedPath(value: string): boolean;
+export function decodeBytes(value: string): Uint8Array<ArrayBuffer>;
+export function encodeBytes(value: Uint8Array): string;
+export function validateProject(value: unknown): Project;
+export function parseProject(text: string): Project;
+export function projectName(name: string): string;
+export function packageProject(project: Project): string;
+export function importBrowserProject(files: File[]): Promise<ImportResult>;
+export function compatibility(project: Project): Report;

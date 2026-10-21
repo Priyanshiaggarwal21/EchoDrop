@@ -137,3 +137,11 @@
   .selected-panel,.shared-heading,.transfer-row,.activity-empty,.section-intro{padding-left:14px;padding-right:14px}
   .transfer-detail{font-size:10px}
 }
+
+/* Project review reuses the workspace's functional panels and controls. */
+.project-panel{margin:24px 28px;padding:20px;border:1px solid var(--line-2);border-radius:6px;font-size:13px;overflow-wrap:anywhere}
+.project-panel h3{margin:0 0 8px;font-size:16px}.project-panel h4{margin:12px 0 4px}.project-panel details{margin:16px 0}.project-panel summary{cursor:pointer;color:var(--ink)}
+.project-panel ul,.project-panel ol{padding-left:22px}.project-actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.project-file-list{max-height:300px;overflow:auto;margin:12px 0}
+.project-file-list label{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--line-2)}.project-file-list input{flex:0 0 auto;margin-top:3px}.project-file-list small{display:block;color:var(--muted);margin-top:4px}
+.project-received{border-top:1px solid var(--line-2);margin-top:20px;padding-top:20px}.project-panel .send-row{flex-wrap:wrap;gap:12px}
+@media(max-width:600px){.project-panel{margin:16px 12px;padding:16px}.project-actions{width:100%}.project-actions .button{width:100%}}
