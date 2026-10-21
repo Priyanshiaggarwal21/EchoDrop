@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { bytes, fingerprint, LIMIT, request, sha256File, TransferError, type Transfer, type Transport } from './transfer-api';
+import { bytes, fingerprint, newTransferId, LIMIT, request, sha256File, TransferError, type Transfer, type Transport } from './transfer-api';
 import './omnidrop.css';
+import { withSharingCheck, type ScanResult } from '../../../packages/transfer/secret-scan.mjs';
 
 type Phase = 'Checking' | 'Preparing' | 'Uploading' | 'Verifying' | 'Completed' | 'Interrupted' | 'Resumable' | 'Failed';
-type Record = { id: string; key: string; name: string; size: number; retained: number; phase: Phase; note: string; restart?: boolean };
+type Record = { id: string; key: string; name: string; size: number; retained: number; phase: Phase; note: string; restart?: boolean; creating?: boolean };
 type Device = { id: string; deviceName: string; expiresAt: number };
 const journal = 'echodrop:omni:records:v1';
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -91,6 +92,16 @@ export function OmniDrop({
   const [query, setQuery] = useState('');
   const [checking, setChecking] = useState(false);
   const alive = useRef(true);
+  const reconciling = useRef(false);
+  const [scanWarning, setScanWarning] = useState<{ file: File; result: ScanResult } | null>(null);
+  const scanDecision = useRef<((allow: boolean) => void) | undefined>(undefined);
+  useEffect(() => () => { scanDecision.current?.(false); }, []);
+  function decideSharing(allow: boolean) {
+    const resolve = scanDecision.current; scanDecision.current = undefined;
+    setScanWarning(null);
+    if (!allow) { setSelected(null); setPhase('Sharing cancelled. No new file bytes were uploaded.'); }
+    resolve?.(allow);
+  }
   const fileCache = useRef(new Map<string, File>());
 
   function persist(next: Record[]) {
@@ -118,6 +129,7 @@ export function OmniDrop({
   function fromServer(record: Record, state: Transfer): Record {
     return {
       ...record,
+      creating: false,
       retained: state.retainedBytes,
       phase: state.state === 'completed' ? 'Completed' : state.state === 'failed' ? 'Failed' : 'Resumable',
       restart: state.state === 'failed',
@@ -130,8 +142,8 @@ export function OmniDrop({
   }
 
   async function reconcile() {
-    if (lock.current) return;
-    setChecking(true);
+    if (lock.current || reconciling.current) return;
+    reconciling.current = true; setChecking(true);
     for (const record of recordsRef.current) {
       if (!alive.current || lock.current) break;
       try {
@@ -139,20 +151,24 @@ export function OmniDrop({
         if (!lock.current) update(fromServer(record, state));
       } catch (e) {
         if (!lock.current) update({
-          ...record, phase: 'Interrupted',
-          restart: e instanceof TransferError && [404, 410].includes(e.status),
-          note: recovery(e)
+          ...record, phase: e instanceof TransferError && [410, 422].includes(e.status) ? 'Failed' : 'Interrupted',
+          restart: e instanceof TransferError && ([410, 422].includes(e.status) || (!record.creating && e.status === 404)),
+          note: record.creating && !(e instanceof TransferError && [401, 403, 410, 422].includes(e.status)) ? 'Creation is not confirmed. Retry with the same file and transfer ID when the host is reachable.' : recovery(e)
         });
       }
     }
-    setChecking(false);
+    reconciling.current = false; setChecking(false);
   }
 
   useEffect(() => {
     alive.current = true;
     void refreshFiles();
     void reconcile();
-    return () => { alive.current = false; };
+    const reconnect = () => { void refreshFiles(); void reconcile(); };
+    const visible = () => { if (document.visibilityState === 'visible') reconnect(); };
+    window.addEventListener('online', reconnect);
+    document.addEventListener('visibilitychange', visible);
+    return () => { alive.current = false; window.removeEventListener('online', reconnect); document.removeEventListener('visibilitychange', visible); };
   }, []);
 
   useEffect(() => {
@@ -166,7 +182,8 @@ export function OmniDrop({
   function recovery(error: unknown) {
     if (error instanceof TransferError) {
       if ([401, 403].includes(error.status)) return 'Access expired or was revoked. Reopen the desktop app or rejoin with host approval, then resume the same file.';
-      if ([404, 410].includes(error.status)) return 'The host no longer has this transfer. Select the original file and explicitly start a new upload.';
+      if ([410, 422].includes(error.status)) return 'Host rejected this upload after an integrity failure. Its chunks were discarded. Select the original file and explicitly start a new upload.';
+      if (error.status === 404) return 'The host no longer has this transfer. Select the original file and explicitly start a new upload.';
       if (error.status === 409) return error.message + ' Select the matching file, or retry after the other transfer operation finishes.';
     }
     return (error as Error).message + ' Check your network and host, then resume with the same file. Acknowledged chunks stay on the host.';
@@ -186,22 +203,36 @@ export function OmniDrop({
   }
 
   async function send(file: File, target?: Record, startNew = false) {
-    if (lock.current) return;
-    lock.current = true; setActive(true); onActiveChange?.(true); setMessage(''); setPhase('Preparing · calculating SHA-256');
+    if (lock.current || reconciling.current) return;
+    lock.current = true; setActive(true); onActiveChange?.(true); setMessage(''); setPhase('Checking file locally for sensitive content');
     let current: Record | undefined = target;
     let state: Transfer | undefined;
     let key = '';
     try {
+      await withSharingCheck(file, result => new Promise<boolean>(resolve => {
+        setScanWarning({ file, result }); scanDecision.current = resolve;
+        setPhase('Review required before sharing');
+      }), async () => {
+      if (!alive.current) return;
+      setPhase('Preparing · calculating SHA-256');
       const hash = await sha256File(file); key = fingerprint(file, hash);
       if (target && target.key !== key) throw new Error('The selected file contents do not match this transfer. Select the original file.');
-      let saved = target?.id || recordsRef.current.find(r => r.key === key)?.id;
+      current = target || recordsRef.current.find(r => r.key === key);
+      let saved = current?.id;
       if (!saved) { try { saved = localStorage.getItem(key) || undefined; } catch { /* In-memory records still work. */ } }
       const headers = { 'X-File-Name': encodeURIComponent(file.name), 'X-File-Size': String(file.size), 'X-File-SHA256': hash };
       setPhase(saved && !startNew ? 'Checking retained chunks with the host' : 'Preparing upload on the host');
-      if (saved && !startNew) {
+      if (saved && !startNew && !current?.creating) {
         current = current || { id: saved, key, name: file.name, size: file.size, retained: 0, phase: 'Checking', note: '' };
         state = await request(api, { path: '/transfers/' + saved + '/resume', method: 'POST', headers });
-      } else state = await request(api, { path: '/transfers', method: 'POST', headers });
+      } else {
+        const id = !startNew && current?.creating ? current.id : newTransferId();
+        const previous = target;
+        current = { id, key, name: file.name, size: file.size, retained: 0, phase: 'Preparing', creating: true, note: 'Creation not yet confirmed. Retry will reuse this transfer ID.' };
+        if (startNew && previous) persist(recordsRef.current.filter(r => r.id !== previous.id));
+        remember(key, id); update(current); fileCache.current.set(id, file);
+        state = await request(api, { path: '/transfers', method: 'POST', headers: { ...headers, 'X-Transfer-ID': id } });
+      }
       current = { id: state.id, key, name: file.name, size: file.size, retained: state.retainedBytes, phase: 'Uploading', note: 'Transferring to the host workspace. Progress counts acknowledged bytes.' };
       if (startNew && target) persist(recordsRef.current.filter(r => r.id !== target.id));
       remember(key, state.id); fileCache.current.set(state.id, file); update(current);
@@ -220,18 +251,20 @@ export function OmniDrop({
       update(fromServer(current, state)); setPhase('Completed · SHA-256 verified by the host');
       setSelected(null); fileCache.current.delete(state.id);
       await refreshFiles(); onComplete?.();
+      });
     } catch (error) {
       setPhase('Upload needs attention');
       if (current) {
-        let record: Record = { ...current, phase: 'Interrupted', note: recovery(error), restart: error instanceof TransferError && [404, 410].includes((error as TransferError).status) };
+        let record: Record = { ...current, phase: error instanceof TransferError && [410, 422].includes(error.status) ? 'Failed' : 'Interrupted', note: recovery(error), restart: error instanceof TransferError && ([410, 422].includes(error.status) || (!current.creating && error.status === 404)) };
         try {
           const confirmed = await request(api, { path: '/transfers/' + current.id });
           record = fromServer(record, confirmed);
           if (confirmed.state === 'uploading') record.note = recovery(error);
-          if (confirmed.state === 'completed') { setPhase('Completed · confirmed by host status'); await refreshFiles(); onComplete?.(); }
+          if (confirmed.state === 'completed') { setSelected(null); fileCache.current.delete(current.id); setPhase('Completed · confirmed by host status'); await refreshFiles(); onComplete?.(); }
         } catch { /* Do not replace the last acknowledged byte count with guesses. */ }
+        if (record.creating && !record.restart && !(error instanceof TransferError && [401, 403].includes(error.status))) record.note = 'Creation is not confirmed. Retry with the same file and transfer ID when the host is reachable.';
         update(record);
-      } else setMessage(recovery(error) + (key ? ' If the initial create response was lost, the server cannot identify that unacknowledged transfer; retrying may create a new record.' : ''));
+      } else setMessage(recovery(error));
     } finally { lock.current = false; setActive(false); onActiveChange?.(false); }
   }
 
@@ -289,8 +322,21 @@ export function OmniDrop({
       {storageWarning && <p className="error omni-error" role="status">{storageWarning}</p>}
       {message && <p className="error omni-error" role="alert">{message}</p>}
 
+      {scanWarning && (
+        <section className="selected-panel" aria-label="Review sensitive file" aria-live="polite">
+          <h3>Review before sharing</h3>
+          <p>{scanWarning.file.name}</p>
+          <ul>{[...scanWarning.result.categories, ...scanWarning.result.limitations].map(label => <li key={label}>{label}</li>)}</ul>
+          <p className="fine">Local checks cannot find every secret. Sharing makes this file available to approved workspace members over plain HTTP.</p>
+          <div className="send-row">
+            <button className="button secondary" autoFocus onClick={() => decideSharing(false)}>Remove file / cancel</button>
+            <button className="button" onClick={() => decideSharing(true)}>Share this file anyway</button>
+          </div>
+        </section>
+      )}
+
       {/* ── Files view ── */}
-      {view === 'Files' && (
+      {(view === 'Files' || selected) && (
         <>
           {/* Drop zone / selected file */}
           {!selected ? (
@@ -339,6 +385,11 @@ export function OmniDrop({
             </div>
           )}
 
+        </>
+      )}
+
+      {view === 'Files' && (
+        <>
           {/* Shared files table */}
           <div className="shared-heading">
             <h3>Shared files <span>{filesLoaded ? files.length : '…'}</span></h3>
@@ -412,7 +463,7 @@ export function OmniDrop({
       )}
 
       {/* ── Transfers view: empty state or upload prompt ── */}
-      {view === 'Transfers' && records.length === 0 && (
+      {view === 'Transfers' && !selected && records.length === 0 && (
         <div className="activity-empty">
           <h2>Nothing in transit.</h2>
           <p>Real transfer activity appears here after the host accepts a file.</p>

@@ -6,7 +6,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
-const { createHash } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 
 const CHUNK = 1024 * 1024;
 const bytes = Buffer.alloc(2 * CHUNK + 61, 0xab);
@@ -281,4 +281,67 @@ test('hash mismatch is rejected, cleaned up and stays unavailable after restart'
   await api.code(`/files/${id}.bin`, {}, 404);
   await api.code(`/transfers/${id}/resume`, { method: 'POST', headers }, 410);
   assert(!(await (await api.request('/')).text()).includes(`href="/files/${id}.bin"`));
+});
+
+
+test('lost create and completion responses retry the same durable ID without duplicate files', { timeout: 30000 }, async (t) => {
+  const api = await fixture(t);
+  const id = randomUUID();
+  const creation = { method: 'POST', headers: { ...headers, 'X-Transfer-ID': id } };
+  // The server accepts creation, but the client does not consume its response body.
+  const lost = await api.request('/transfers', creation);
+  assert.equal(lost.status, 201); await lost.body.cancel();
+  await api.stop(); await api.start();
+  const retried = await api.json('/transfers', creation, 201);
+  assert.equal(retried.id, id);
+  assert.deepEqual(await fs.readdir(path.join(api.temporary, 'uploads', '.transfers')), [id]);
+  await api.code('/transfers', { method: 'POST', headers: { ...creation.headers, 'X-File-SHA256': '0'.repeat(64) } }, 409);
+  for (let index = 0; index < 3; index++) {
+    await api.json(`/transfers/${id}/chunks/${index}`, { method: 'PUT', body: bytes.subarray(index * CHUNK, (index + 1) * CHUNK) });
+  }
+  const complete = await api.request(`/transfers/${id}/complete`, { method: 'POST' });
+  assert.equal(complete.status, 201); await complete.body.cancel();
+  await api.stop(); await api.start();
+  assert.equal((await api.json('/transfers', creation, 201)).state, 'completed');
+  assert.equal((await api.json(`/transfers/${id}/resume`, { method: 'POST', headers })).retainedBytes, bytes.length);
+  assert.equal((await api.json(`/transfers/${id}/complete`, { method: 'POST' }, 201)).id, id);
+  assert.deepEqual((await fs.readdir(path.join(api.temporary, 'uploads'))).filter(name => name.endsWith('.bin')), [id + '.bin']);
+  await checkDownload(api, id);
+});
+
+test('concurrent create retries and lost chunk acknowledgement preserve one transfer', { timeout: 30000 }, async (t) => {
+  const api = await fixture(t);
+  const id = randomUUID();
+  const creation = { method: 'POST', headers: { ...headers, 'X-Transfer-ID': id } };
+  const results = await Promise.all([api.request('/transfers', creation), api.request('/transfers', creation)]);
+  assert(results.some(result => result.status === 201));
+  for (const result of results) { assert([201, 409].includes(result.status)); await result.text(); }
+  const lost = await api.request(`/transfers/${id}/chunks/0`, { method: 'PUT', body: bytes.subarray(0, CHUNK) });
+  assert.equal(lost.status, 200); await lost.body.cancel();
+  const before = await fs.stat(path.join(api.directory(id), '0.chunk'));
+  const retry = await api.json(`/transfers/${id}/chunks/0`, { method: 'PUT', body: bytes.subarray(0, CHUNK) });
+  assert.equal(retry.retainedBytes, CHUNK);
+  assert.equal(retry.nextIndex, 1);
+  assert.equal((await fs.stat(path.join(api.directory(id), '0.chunk'))).mtimeMs, before.mtimeMs);
+  assert.equal((await api.json('/transfers', creation, 201)).retainedBytes, CHUNK);
+  assert.deepEqual(await fs.readdir(path.join(api.temporary, 'uploads', '.transfers')), [id]);
+  await api.code('/transfers', { method: 'POST', headers: { ...headers, 'X-Transfer-ID': '../escape' } }, 400);
+});
+
+test('failed integrity cannot be revived by create retry; explicit new ID can succeed', { timeout: 30000 }, async (t) => {
+  const api = await fixture(t);
+  const id = randomUUID();
+  const creation = { method: 'POST', headers: { ...headers, 'X-Transfer-ID': id } };
+  await api.json('/transfers', creation, 201);
+  for (let index = 0; index < 3; index++) {
+    await api.json(`/transfers/${id}/chunks/${index}`, { method: 'PUT', body: Buffer.alloc(Math.min(CHUNK, bytes.length - index * CHUNK), 0xff) });
+  }
+  await api.code(`/transfers/${id}/complete`, { method: 'POST' }, 422);
+  await api.code('/transfers', creation, 410);
+  const fresh = await api.json('/transfers', { method: 'POST', headers: { ...headers, 'X-Transfer-ID': randomUUID() } }, 201);
+  assert.notEqual(fresh.id, id);
+  for (let index = 0; index < 3; index++) await api.json(`/transfers/${fresh.id}/chunks/${index}`, { method: 'PUT', body: bytes.subarray(index * CHUNK, (index + 1) * CHUNK) });
+  await api.json(`/transfers/${fresh.id}/complete`, { method: 'POST' }, 201);
+  await checkDownload(api, fresh.id);
+  await api.code(`/files/${id}.bin`, {}, 404);
 });

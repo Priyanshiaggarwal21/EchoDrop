@@ -146,16 +146,32 @@ function createTransferStore(directory) {
   }
 
   return {
-    async create(originalName, size, expectedHash) {
+    async create(originalName, size, expectedHash, requestedId) {
       if (!Number.isSafeInteger(size) || size < 0) throw fail(400, 'Invalid file size.');
       if (size > MAX_UPLOAD_BYTES) throw fail(413, 'File exceeds 100 MB.');
       if (typeof expectedHash !== 'string' || !validHash.test(expectedHash)) throw fail(400, 'Invalid SHA-256 hash.');
       if (typeof originalName !== 'string' || !originalName) throw fail(400, 'Invalid filename.');
-      const id = randomUUID();
-      await fs.mkdir(folder(id), { recursive: true });
-      const state = { version: 1, id, originalName, size, expectedHash, state: 'uploading', chunks: [] };
-      await save(manifest(id), state);
-      return snapshot(state);
+      const id = requestedId === undefined ? randomUUID() : requestedId;
+      return locked(id, async () => {
+        let exists = false;
+        try { await fs.access(manifest(id)); exists = true; }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        if (exists) {
+          const existing = await load(id);
+          if (existing.originalName !== originalName || existing.size !== size || existing.expectedHash !== expectedHash) {
+            throw fail(409, 'Transfer ID belongs to a different file.');
+          }
+          if (existing.state === 'failed') throw fail(410, 'Integrity check failed. Upload discarded.');
+          return snapshot(existing);
+        }
+        // Never replace a published file whose manifest is missing.
+        try { await fs.access(finalPath(id)); throw fail(409, 'Transfer ID already published.'); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        await fs.mkdir(folder(id), { recursive: true });
+        const state = { version: 1, id, originalName, size, expectedHash, state: 'uploading', chunks: [] };
+        await save(manifest(id), state);
+        return snapshot(state);
+      });
     },
 
     status(id) { return locked(id, async () => snapshot(await load(id))); },

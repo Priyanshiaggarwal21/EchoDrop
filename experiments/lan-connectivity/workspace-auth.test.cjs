@@ -244,3 +244,21 @@ test('cross-origin requests, Host spoofing and malformed input denied', async (t
   const tampered = invite.slice(0, -1) + (invite.endsWith('0') ? '1' : '0');
   await expect(await api.post('/auth/join', { invitationToken: tampered, deviceName: 'Android' }), 401);
 });
+
+
+test('expired member cannot retry uploads; reapproval resumes retained chunks with the same ID', async (t) => {
+  const api = await fixture(t);
+  const { cookie } = await api.member();
+  const { created, bytes, headers } = await transfer(api, cookie);
+  await expect(await api.request(`/transfers/${created.id}/chunks/0`, { method: 'PUT', cookie, body: bytes }), 200);
+  api.advance(8 * 60 * 60 * 1000);
+  await expect(await api.request('/transfers', { method: 'POST', cookie, headers: { ...headers, 'X-Transfer-ID': created.id } }), 401);
+  await expect(await api.request(`/transfers/${created.id}/resume`, { method: 'POST', cookie, headers }), 401);
+  const renewed = await api.member();
+  const retained = await expect(await api.request(`/transfers/${created.id}/resume`, { method: 'POST', cookie: renewed.cookie, headers }), 200);
+  assert.equal(retained.retainedBytes, bytes.length);
+  assert.equal(retained.id, created.id);
+  await expect(await api.post(`/transfers/${created.id}/complete`, {}, renewed.cookie), 201);
+  const download = await api.request(`/files/${created.id}.bin`, { cookie: renewed.cookie });
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()), bytes);
+});

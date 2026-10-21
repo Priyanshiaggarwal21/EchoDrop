@@ -31,6 +31,11 @@ function contentDisposition(name) {
 
 async function handle(request, response) {
   if (await access.handle(request, response)) return;
+  if (request.method === 'GET' && request.url === '/secret-scan.mjs') {
+    response.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
+    response.end(await fs.readFile(path.join(__dirname, '../../packages/transfer/secret-scan.mjs'), 'utf8'));
+    return;
+  }
   if (request.method === 'GET' && request.url === '/sha256.js') {
     response.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
     response.end(await fs.readFile(require.resolve('../../packages/transfer/browser-sha256.js'), 'utf8'));
@@ -82,12 +87,13 @@ async function handle(request, response) {
 <p id="status" role="status"></p>
 <ul id="files">${links.join('')}</ul>
 <script nonce="${request.scriptNonce}" src="/sha256.js"></script>
-<script nonce="${request.scriptNonce}">
+<script type="module" nonce="${request.scriptNonce}">
+import { withSharingCheck } from "/secret-scan.mjs";
 function workspaceFetch(url, options = {}) {
   if (options.method && options.method !== 'GET') {
     options = { ...options, headers: { ...options.headers, 'X-EchoDrop-Request': '1' } };
   }
-  return fetch(url, options);
+  return fetch(url, { ...options, signal: AbortSignal.timeout(120000) });
 }
 document.getElementById('preview-grant').onclick = async () => {
   const link = document.getElementById('preview-link'); link.hidden = true; link.removeAttribute('href');
@@ -113,22 +119,36 @@ document.getElementById('upload').addEventListener('submit', async (event) => {
   let transfer;
   let storageKey;
   try {
+    status.textContent = 'Checking file locally for sensitive content…';
+    const shared = await withSharingCheck(file, async result => confirm(file.name + ': ' + [...result.categories, ...result.limitations].join('; ') + ' Share anyway with approved workspace members over plain HTTP?'), async () => {
     status.textContent = 'Hashing file…';
     const hash = await sha256File(file);
     storageKey = 'echodrop:transfer:' + hash + ':' + file.size + ':' + encodeURIComponent(file.name);
     const headers = { 'X-File-Name': encodeURIComponent(file.name), 'X-File-Size': String(file.size), 'X-File-SHA256': hash };
-    const savedId = localStorage.getItem(storageKey);
-    if (savedId) {
+    let savedId = localStorage.getItem(storageKey);
+    const pendingKey = storageKey + ':creating';
+    if (savedId && localStorage.getItem(pendingKey) !== savedId) {
       const resumed = await workspaceFetch('/transfers/' + encodeURIComponent(savedId) + '/resume', { method: 'POST', headers });
       if (resumed.ok) transfer = await resumed.json();
-      else if (resumed.status === 404 || resumed.status === 410) localStorage.removeItem(storageKey);
+      else if ((resumed.status === 404 || resumed.status === 410) && confirm('The host cannot resume this upload. Start a new upload of this file?')) savedId = null;
       else throw new Error(await resumed.text());
     }
     if (!transfer) {
-      const started = await workspaceFetch('/transfers', { method: 'POST', headers });
-      if (!started.ok) throw new Error(await started.text());
+      if (!savedId) {
+        const value = crypto.getRandomValues(new Uint8Array(16));
+        value[6] = (value[6] & 15) | 64; value[8] = (value[8] & 63) | 128;
+        const hex = Array.from(value, b => b.toString(16).padStart(2, '0')).join('');
+        savedId = [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join('-');
+      }
+      localStorage.setItem(storageKey, savedId);
+      localStorage.setItem(pendingKey, savedId);
+      const started = await workspaceFetch('/transfers', { method: 'POST', headers: { ...headers, 'X-Transfer-ID': savedId } });
+      if (!started.ok) {
+        if (started.status === 410) localStorage.removeItem(pendingKey);
+        throw new Error(await started.text());
+      }
       transfer = await started.json();
-      localStorage.setItem(storageKey, transfer.id);
+      localStorage.removeItem(pendingKey);
     }
     progress.value = transfer.retainedBytes;
     status.textContent = transfer.retainedBytes + ' / ' + file.size + ' bytes retained';
@@ -153,9 +173,10 @@ document.getElementById('upload').addEventListener('submit', async (event) => {
     link.download = uploaded.originalName;
     link.textContent = uploaded.originalName;
     item.appendChild(link);
-    document.getElementById('files').appendChild(item);
-    localStorage.removeItem(storageKey);
+    if (!Array.from(document.querySelectorAll('#files a')).some(a => a.getAttribute('href') === uploaded.download)) document.getElementById('files').appendChild(item);
     status.textContent = 'Upload verified.';
+    });
+    if (!shared) { document.getElementById('file').value = ''; status.textContent = 'Sharing cancelled. No new file bytes were uploaded.'; }
   } catch (error) {
     let retained = null;
     if (transfer) {
@@ -165,7 +186,6 @@ document.getElementById('upload').addEventListener('submit', async (event) => {
           const latest = await result.json();
           retained = latest.retainedBytes;
           progress.value = retained;
-          if (latest.state === 'failed') localStorage.removeItem(storageKey);
         }
       } catch { /* Keep the saved ID when the server is unreachable. */ }
     }
@@ -195,7 +215,7 @@ document.getElementById('upload').addEventListener('submit', async (event) => {
     }
     const transfer = resumeRoute
       ? await transferStore.resume(resumeRoute[1], originalName, Number(sizeHeader), request.headers['x-file-sha256'])
-      : await transferStore.create(originalName, Number(sizeHeader), request.headers['x-file-sha256']);
+      : await transferStore.create(originalName, Number(sizeHeader), request.headers['x-file-sha256'], request.headers['x-transfer-id']);
     response.writeHead(resumeRoute ? 200 : 201, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify(transfer));
     return;

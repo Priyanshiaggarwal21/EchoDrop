@@ -81,7 +81,7 @@ ipcMain.handle('workspace:transfer', async (event, value) => {
   if (bytes !== undefined && (!(bytes instanceof ArrayBuffer) || bytes.byteLength > 1024 * 1024 || method !== 'PUT')) throw new Error('Invalid chunk.');
   const safeHeaders = { Cookie: credential, ...(method !== 'GET' ? { 'X-EchoDrop-Request': '1' } : {}) };
   for (const [key, value] of Object.entries(headers)) {
-    if (!['X-File-Name', 'X-File-Size', 'X-File-SHA256'].includes(key) || typeof value !== 'string' || value.length > 4096) throw new Error('Invalid transfer header.');
+    if (!['X-File-Name', 'X-File-Size', 'X-File-SHA256', 'X-Transfer-ID'].includes(key) || typeof value !== 'string' || value.length > 4096) throw new Error('Invalid transfer header.');
     safeHeaders[key] = value;
   }
   const response = await fetch(origin + route, { method, headers: safeHeaders, ...(bytes ? { body: Buffer.from(bytes) } : {}), signal: AbortSignal.timeout(120000) });

@@ -17,3 +17,12 @@ export async function request(api: Transport, value: Request): Promise<Transfer>
 }
 export function fingerprint(file: File, hash: string) { return 'echodrop:transfer:' + hash + ':' + file.size + ':' + encodeURIComponent(file.name); }
 export function bytes(value: number) { return value < 1000 ? `${value} B` : value < 1000000 ? `${(value / 1000).toFixed(1)} KB` : `${(value / 1000000).toFixed(2)} MB`; }
+
+// getRandomValues works on HTTP LAN pages where randomUUID is unavailable.
+export function newTransferId() {
+  const value = crypto.getRandomValues(new Uint8Array(16));
+  value[6] = (value[6]! & 15) | 64;
+  value[8] = (value[8]! & 63) | 128;
+  const hex = Array.from(value, byte => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
