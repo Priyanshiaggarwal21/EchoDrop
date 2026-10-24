@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Soft Pulse",
+    "file": "soft-pulse.wav",
+    "durationSeconds": 0.7,
+    "peakDbFS": -32.0
+  },
+  {
+    "name": "Glass Whisper",
+    "file": "glass-whisper.wav",
+    "durationSeconds": 0.7,
+    "peakDbFS": -27.5
+  },
+  {
+    "name": "Airy Tone",
+    "file": "airy-tone.wav",
+    "durationSeconds": 0.8,
+    "peakDbFS": -26.4
+  },
+  {
+    "name": "Gentle Duo",
+    "file": "gentle-duo.wav",
+    "durationSeconds": 0.82,
+    "peakDbFS": -32.0
+  },
+  {
+    "name": "Minimal Signal",
+    "file": "minimal-signal.wav",
+    "durationSeconds": 0.4,
+    "peakDbFS": -32.0
+  }
+]
