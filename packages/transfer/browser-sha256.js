@@ -1,5 +1,5 @@
 // Incremental SHA-256 also works on plain HTTP LAN pages without Web Crypto.
-async function sha256File(file) {
+async function sha256File(file, options = {}) {
   const constants = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -38,7 +38,9 @@ async function sha256File(file) {
   let tail = new Uint8Array(0);
   // 1 MiB is block-aligned; only the final read can leave a partial block.
   for (let offset = 0; offset < file.size; offset += 1024 * 1024) {
+    if(options.stopped?.())throw new Error('Hashing paused. Select the original file to retry.');
     const bytes = new Uint8Array(await file.slice(offset, offset + 1024 * 1024).arrayBuffer());
+    options.onProgress?.(Math.min(file.size,offset+bytes.length));
     const end = bytes.length - (bytes.length % 64);
     for (let i = 0; i < end; i += 64) block(bytes, i);
     tail = bytes.slice(end);

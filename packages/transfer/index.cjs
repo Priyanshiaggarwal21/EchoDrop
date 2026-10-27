@@ -4,6 +4,8 @@ const { randomUUID, createHash } = require('node:crypto');
 const { createReadStream } = require('node:fs');
 
 const CHUNK_BYTES = 1024 * 1024;
+const {HARD_FILE_BYTES,transferPolicy,requireSpace}=require('./limits.cjs');
+// Preserve the legacy HTTP form limit; authenticated stores use transferPolicy.
 const MAX_UPLOAD_BYTES = 100_000_000;
 const validId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const validHash = /^[0-9a-f]{64}$/;
@@ -28,7 +30,9 @@ async function digest(filename) {
   return hash.digest('hex');
 }
 
-function createTransferStore(directory) {
+function createTransferStore(directory, options = {}) {
+  const policy=transferPolicy(options), recovered=new Set();
+  let creation=Promise.resolve();const reserve=fn=>{const p=creation.then(fn);creation=p.catch(()=>{});return p;};
   const active = new Set();
   const root = path.join(directory, '.transfers');
   const folder = (id) => path.join(root, id);
@@ -41,6 +45,7 @@ function createTransferStore(directory) {
     if (active.has(id)) throw fail(409, 'Transfer is busy. Retry shortly.');
     active.add(id);
     try { return await operation(); }
+    catch(error){if(error.code==='ENOSPC')throw fail(507,'Insufficient disk space. Acknowledged chunks are retained; free storage and retry.');throw error;}
     finally { active.delete(id); }
   }
 
@@ -77,14 +82,14 @@ function createTransferStore(directory) {
 
   async function load(id) {
     let state;
-    try { state = JSON.parse(await fs.readFile(manifest(id), 'utf8')); }
+    try { if((await fs.stat(manifest(id))).size>8*1024*1024)throw fail(500,'Transfer manifest exceeds capacity.'); state = JSON.parse(await fs.readFile(manifest(id), 'utf8')); }
     catch (error) {
       if (error.code === 'ENOENT') throw fail(404, 'Unknown transfer.');
       throw error;
     }
     const count = Math.ceil(state.size / CHUNK_BYTES);
     if (state.version !== 1 || state.id !== id || !Number.isSafeInteger(state.size)
-      || state.size < 0 || state.size > MAX_UPLOAD_BYTES || !validHash.test(state.expectedHash)
+      || state.size < 0 || state.size > HARD_FILE_BYTES || !validHash.test(state.expectedHash)
       || typeof state.originalName !== 'string' || !Array.isArray(state.chunks)
       || state.chunks.length > count || !['uploading', 'completed', 'failed'].includes(state.state)
       || state.chunks.some((chunk, index) => !chunk || !validHash.test(chunk.sha256)
@@ -119,6 +124,7 @@ function createTransferStore(directory) {
       await cleanup(state);
       return state;
     }
+    if(recovered.has(id))return state;
     // A chunk is retained only if its durable record AND disk contents agree.
     let retained = 0;
     for (const chunk of state.chunks) {
@@ -142,17 +148,18 @@ function createTransferStore(directory) {
         await fs.rm(path.join(folder(id), name), { force: true });
       }
     }
+    recovered.add(id);
     return state;
   }
 
   return {
     async create(originalName, size, expectedHash, requestedId) {
       if (!Number.isSafeInteger(size) || size < 0) throw fail(400, 'Invalid file size.');
-      if (size > MAX_UPLOAD_BYTES) throw fail(413, 'File exceeds 100 MB.');
+      if (size > policy.maxFileBytes) throw fail(413, `File exceeds configured limit of ${policy.maxFileBytes} bytes.`);
       if (typeof expectedHash !== 'string' || !validHash.test(expectedHash)) throw fail(400, 'Invalid SHA-256 hash.');
       if (typeof originalName !== 'string' || !originalName) throw fail(400, 'Invalid filename.');
       const id = requestedId === undefined ? randomUUID() : requestedId;
-      return locked(id, async () => {
+      return reserve(()=>locked(id, async () => {
         let exists = false;
         try { await fs.access(manifest(id)); exists = true; }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -167,11 +174,16 @@ function createTransferStore(directory) {
         // Never replace a published file whose manifest is missing.
         try { await fs.access(finalPath(id)); throw fail(409, 'Transfer ID already published.'); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
+        await fs.mkdir(root,{recursive:true});
+        let reserved=0;const folders=await fs.readdir(root);if(folders.length>=2000)throw fail(507,'Transfer registry capacity reached.');
+        for(const entry of folders){if(!validId.test(entry))continue;const dir=path.join(root,entry);if((await fs.lstat(dir)).isSymbolicLink())throw fail(500,'Unsafe transfer storage.');const st=await fs.stat(path.join(dir,'state.json')).catch(e=>{if(e.code==='ENOENT')return null;throw e;});if(!st)continue;if(st.size>8*1024*1024)throw fail(500,'Transfer manifest exceeds capacity.');const other=JSON.parse(await fs.readFile(path.join(dir,'state.json'),'utf8'));if(!Number.isSafeInteger(other.size)||other.size<0||other.size>HARD_FILE_BYTES)throw fail(500,'Invalid quota record.');if(other.state!=='failed')reserved+=other.size*(other.state==='completed'?1:2);}
+        if(reserved+size*2>policy.quotaBytes)throw fail(507,'Transfer storage quota exceeded, including assembly reservation. Cancel unused transfers or raise the configured quota.');
+        await requireSpace(fs,root,size*2,policy.reserveBytes);
         await fs.mkdir(folder(id), { recursive: true });
         const state = { version: 1, id, originalName, size, expectedHash, state: 'uploading', chunks: [] };
         await save(manifest(id), state);
         return snapshot(state);
-      });
+      }));
     },
 
     status(id) { return locked(id, async () => snapshot(await load(id))); },
@@ -199,6 +211,7 @@ function createTransferStore(directory) {
         }
         if (state.state !== 'uploading' || index !== state.chunks.length) throw fail(409, 'Unexpected chunk.');
         const expected = Math.min(CHUNK_BYTES, state.size - index * CHUNK_BYTES);
+        await requireSpace(fs,root,expected,policy.reserveBytes);
         const temporary = `${chunkPath(id, index)}.part`;
         const file = await fs.open(temporary, 'wx');
         let committed = false;
@@ -233,6 +246,8 @@ function createTransferStore(directory) {
         if (state.state === 'completed') return snapshot(state);
         if (state.chunks.length !== Math.ceil(state.size / CHUNK_BYTES)) throw fail(409, 'Transfer is incomplete.');
         const assembled = path.join(folder(id), 'assembled.part');
+        await fs.rm(assembled,{force:true});
+        await requireSpace(fs,root,state.size,policy.reserveBytes);
         const file = await fs.open(assembled, 'wx');
         let matches = false;
         try {
@@ -251,7 +266,8 @@ function createTransferStore(directory) {
           throw fail(422, 'Integrity check failed. Upload discarded.');
         }
         await save(`${finalPath(id)}.json`, { originalName: state.originalName, sha256: state.expectedHash });
-        await fs.rename(assembled, finalPath(id));
+        await fs.link(assembled, finalPath(id)); // Exclusive publication: never overwrite a destination.
+        await fs.unlink(assembled);
         state.state = 'completed';
         await save(manifest(id), state);
         await cleanup(state);

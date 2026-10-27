@@ -10,7 +10,7 @@ function createLanServer({ uploadsDirectory = path.join(__dirname, 'uploads'), a
 const uploads = uploadsDirectory;
 const access = createWorkspaceAccess({ auth, preview });
 const maxUploadBytes = MAX_UPLOAD_BYTES;
-const transferStore = createTransferStore(uploads);
+const transferStore = createTransferStore(uploads, { maxFileBytes: MAX_UPLOAD_BYTES });
 const safeName = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.bin$/;
 
 function sanitizeFilename(value) {

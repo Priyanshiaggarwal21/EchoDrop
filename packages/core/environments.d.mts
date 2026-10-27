@@ -1,0 +1,5 @@
+export interface EnvironmentFields {title:string;capturedAt:string;system:{platform:string;release:string;arch:string};runtime:{node:string;electron?:string};tools:{name:string;available:string;version?:string;status?:'available'|'unavailable'|'error';source?:'system-path';diagnostic?:string}[];dependencies:{name:string;required:string;installed:string}[];locks:{name:string;sha256:string}[];config:Record<string,string>;ports:{port:number;state:string}[];limitations:string[]}
+export interface EnvironmentRecord {id:string;participantId:string;displayName:string;version:number;revision:number;contentVersion:number;status:string;authorActive:boolean;fields:EnvironmentFields;history:{contentVersion:number;at:string;fields:EnvironmentFields}[];reviews:{kind:string;at:string;contentVersion:number}[]}
+export function environmentFields(value:unknown):EnvironmentFields;
+export function validEnvironment(value:unknown):EnvironmentRecord;
+export function compareEnvironments(a:EnvironmentFields,b:EnvironmentFields):{notice:string;issues:{severity:string;field:string;expected:string;observed:string;guidance:string}[]};

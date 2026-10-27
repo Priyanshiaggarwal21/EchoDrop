@@ -1,10 +1,11 @@
-const { app, BrowserWindow, ipcMain, session } = require('electron');
+const { app, BrowserWindow, ipcMain, session, dialog, shell, safeStorage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
 const { createLanServer } = require('../../experiments/lan-connectivity/server.cjs');
 const { installPreview } = require('./preview.cjs');
 const { installProjects } = require('./project.cjs');
+const { installProjectRegistry } = require('./registry-ipc.cjs');
 
 const entry = pathToFileURL(path.join(__dirname, '../web/dist/index.html')).href;
 let service, origin, credential, starting, window;
@@ -48,6 +49,7 @@ function trusted(event) {
   if (event.sender !== window.webContents || event.senderFrame.url.split('#')[0] !== entry) throw new Error('Untrusted client.');
 }
 installProjects({ ipcMain, trusted, parent: () => window, authorize: () => api('/host/state'), download: api });
+installProjectRegistry({ ipcMain, trusted, safeStorage, parent: () => window, registryFile: () => path.join(app.getPath('userData'), 'projects', 'registry.json'), collaborationFile: () => path.join(app.getPath('userData'), 'projects', 'collaboration.json'), ui: { dialog, shell } });
 installPreview({ ipcMain, trusted, parent: () => window, request: async (route, body) => {
   if (!service) throw new Error('Create your workspace first.');
   const response = await fetch(origin + route, { method: body === undefined ? 'GET' : 'POST', headers: { Cookie: credential, 'Content-Type': 'application/json', 'X-EchoDrop-Request': '1' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(20000) });
@@ -123,9 +125,22 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
   app.whenReady().then(() => {
-    window = new BrowserWindow({ width: 1280, height: 860, minWidth: 380, minHeight: 560, backgroundColor: '#19211e', autoHideMenuBar: true,
+    window = new BrowserWindow({ width: 1280, height: 860, minWidth: 380, minHeight: 560, backgroundColor: '#101719', autoHideMenuBar: true,
       webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     window.webContents.on('will-navigate', (event) => event.preventDefault());
+    // Route native Back/Forward through the SPA; window close remains an OS action.
+    window.on('app-command', (event, command) => {
+      if (command !== 'browser-backward' && command !== 'browser-forward') return;
+      event.preventDefault();
+      window.webContents.send('workspace:navigate', command === 'browser-backward' ? 'back' : 'forward');
+    });
+    window.webContents.on('before-input-event', (event, input) => {
+      const back = input.key === 'BrowserBack' || (input.alt && input.key === 'ArrowLeft');
+      const forward = input.key === 'BrowserForward' || (input.alt && input.key === 'ArrowRight');
+      if (!back && !forward) return;
+      event.preventDefault();
+      if (input.type === 'keyDown' && !input.isAutoRepeat) window.webContents.send('workspace:navigate', back ? 'back' : 'forward');
+    });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.loadURL(entry);
   });

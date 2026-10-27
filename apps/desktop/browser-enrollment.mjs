@@ -1,0 +1,35 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {createHash,createPublicKey,randomBytes,randomUUID,verify} from 'node:crypto';
+import {intentId} from '../../packages/core/intentions.mjs';
+import {regularFile,writeAtomic} from './secure-content-store.mjs';
+const hash=x=>createHash('sha256').update(x).digest('hex');
+const token=()=>randomBytes(32).toString('base64url');
+const states=['pending','approved','accepted','denied','expired','revoked'];
+function publicIdentity(jwk){if(!jwk||jwk.kty!=='EC'||jwk.crv!=='P-256'||Object.keys(jwk).some(k=>!['kty','crv','x','y','ext','key_ops'].includes(k))||!/^[-_A-Za-z0-9]{43}$/.test(jwk.x)||!/^[-_A-Za-z0-9]{43}$/.test(jwk.y))throw Error('Invalid public device key.');const key=createPublicKey({key:jwk,format:'jwk'});return{key,fingerprint:hash(key.export({type:'spki',format:'der'}))};}
+export function createBrowserEnrollment(file,{protection,authorize,origin,now=Date.now}){
+ let tail=Promise.resolve();const challenges=new Map();const serial=fn=>{const p=tail.then(fn);tail=p.catch(()=>{});return p;};
+ async function load(){try{if((await regularFile(file)).size>4*1024*1024)throw Error();const e=JSON.parse(await fs.readFile(file,'utf8'));if(e.version!==1)throw Error();const d=JSON.parse(protection.open(e.sealed));if(d.version!==1||!Array.isArray(d.invites)||!Array.isArray(d.devices)||d.invites.length>500||d.devices.length>500)throw Error();const ids=new Set(),fps=new Set();for(const i of d.invites){if(!intentId(i.id)||ids.has(i.id)||!/^[a-f0-9]{64}$/.test(i.digest)||!Number.isSafeInteger(i.expiresAt)||typeof i.used!=='boolean'||!intentId(i.projectId))throw Error();ids.add(i.id);}for(const device of d.devices){if(fps.has(device.fingerprint)||publicIdentity(device.publicKey).fingerprint!==device.fingerprint||!states.includes(device.status)||!d.invites.some(i=>i.id===device.inviteId&&i.used)||typeof device.name!=='string'||device.name.length>80||!Number.isSafeInteger(device.updatedAt)||!(device.lastSeen===null||Number.isSafeInteger(device.lastSeen)))throw Error();fps.add(device.fingerprint);}return d;}catch(e){if(e.code==='ENOENT')return{version:1,invites:[],devices:[]};throw Error('Protected browser enrollment registry is corrupt or unavailable. Original preserved.');}}
+ async function save(d){await fs.mkdir(path.dirname(file),{recursive:true});if((await fs.lstat(path.dirname(file))).isSymbolicLink())throw Error('Unsafe enrollment storage.');await writeAtomic(file,{version:1,sealed:protection.seal(JSON.stringify(d))});}
+ const expiry=(d)=>{for(const x of d.devices){const i=d.invites.find(i=>i.id===x.inviteId);if(['pending','approved'].includes(x.status)&&i.expiresAt<=now())x.status='expired';}};
+ const view=x=>({fingerprint:x.fingerprint,name:x.name,status:x.status,updatedAt:x.updatedAt,lastSeen:x.lastSeen});
+ return{
+ local:(projectId,action,value={})=>serial(async()=>{await authorize(projectId);const d=await load();expiry(d);
+  if(action==='invite'){if(d.invites.length>=500)throw Error('Invitation capacity reached.');const secret=token(),id=randomUUID(),expiresAt=now()+300000;d.invites.push({id,projectId,digest:hash(secret),expiresAt,used:false});await save(d);return{url:origin()+'/join#invite='+secret,expiresAt};}
+  if(action!=='list'){const device=d.devices.find(x=>x.fingerprint===value.fingerprint&&d.invites.some(i=>i.id===x.inviteId&&i.projectId===projectId));if(!device)throw Error('Device not found in this scope.');if(action==='approve'){if(device.status!=='pending'||value.verifiedFingerprint!==device.fingerprint)throw Error('Compare the complete browser fingerprint before approval.');device.status='approved';}else if(action==='deny'){if(!['pending','approved'].includes(device.status))throw Error('Request already terminal.');device.status='denied';}else if(action==='revoke')device.status='revoked';else throw Error('Invalid host enrollment action.');device.updatedAt=now();}
+  await save(d);return d.devices.filter(x=>d.invites.some(i=>i.id===x.inviteId&&i.projectId===projectId)).map(view);
+ }),
+ challenge:body=>serial(async()=>{if(!body||Object.keys(body).some(k=>!['operation','publicKey','payload'].includes(k))||!['claim','status','complete','decline','reconnect'].includes(body.operation)||!body.payload||typeof body.payload!=='object'||Array.isArray(body.payload)||Object.keys(body.payload).some(k=>!['invitation','name'].includes(k)))throw Error('Invalid enrollment challenge request.');publicIdentity(body.publicKey);for(const [id,c] of challenges)if(c.expiresAt<=now())challenges.delete(id);if(challenges.size>=128)throw Error('Enrollment busy. Retry in one minute.');const id=token(),message=JSON.stringify(['EchoDrop browser enrollment v1',origin(),id,hash(JSON.stringify(body))]);challenges.set(id,{message,body,expiresAt:now()+60000});return{id,message};}),
+ prove:(request)=>serial(async()=>{if(!request||Object.keys(request).some(k=>!['id','signature'].includes(k)))throw Error('Invalid proof.');const challenge=challenges.get(request.id);challenges.delete(request.id);if(!challenge||challenge.expiresAt<=now())throw Error('Challenge expired or already used.');const {body,message}=challenge,{key,fingerprint}=publicIdentity(body.publicKey);if(typeof request.signature!=='string'||!/^[-_A-Za-z0-9]{86}$/.test(request.signature)||!verify('sha256',Buffer.from(message),{key,dsaEncoding:'ieee-p1363'},Buffer.from(request.signature,'base64url')))throw Error('Device key possession could not be verified.');const d=await load();expiry(d);let device=d.devices.find(x=>x.fingerprint===fingerprint);
+  if(body.operation==='claim'){
+   if(device)throw Error('Identity already registered or terminal. Use status/reconnect; revoked keys cannot re-enroll.');const secret=body.payload.invitation;if(typeof secret!=='string'||!/^[-_A-Za-z0-9]{43}$/.test(secret))throw Error('Invitation unavailable.');const invite=d.invites.find(i=>i.digest===hash(secret));if(!invite||invite.used||invite.expiresAt<=now())throw Error('Invitation unavailable.');await authorize(invite.projectId);if(d.devices.length>=500)throw Error('Device capacity reached.');const name=body.payload.name;if(typeof name!=='string'||!name.trim()||name.length>80||/[\x00-\x1f]/.test(name))throw Error('Enter a device name up to 80 characters.');invite.used=true;device={fingerprint,publicKey:body.publicKey,inviteId:invite.id,name:name.trim(),status:'pending',updatedAt:now(),lastSeen:null};d.devices.push(device);
+  }else{
+   if(!device)throw Error('Unknown device.');await authorize(d.invites.find(i=>i.id===device.inviteId).projectId);
+   if(body.operation==='complete'){if(device.status!=='approved')throw Error('Host approval is required and must not have expired.');device.status='accepted';device.lastSeen=now();}
+   else if(body.operation==='reconnect'){if(device.status!=='accepted')throw Error('Device is not approved or has been revoked.');device.lastSeen=now();}
+   else if(body.operation==='decline'){if(!['pending','approved'].includes(device.status))throw Error('Request already terminal.');device.status='denied';}
+   device.updatedAt=now();
+  }
+  await save(d);return view(device);
+ })};
+}

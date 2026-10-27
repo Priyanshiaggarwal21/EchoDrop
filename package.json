@@ -2,7 +2,11 @@
   "name": "echodrop",
   "version": "0.0.0",
   "private": true,
-  "scripts": { "dev": "npm run dev -w @echodrop/web", "build": "npm run build -w @echodrop/web", "desktop": "npm run build && npm start -w @echodrop/desktop" },
+  "scripts": {
+    "dev": "npm run dev -w @echodrop/web",
+    "build": "npm run build -w @echodrop/web",
+    "desktop": "npm run build && npm start -w @echodrop/desktop"
+  },
   "description": "EchoDrop repository foundation",
   "workspaces": [
     "apps/desktop",
@@ -11,5 +15,8 @@
     "packages/transfer",
     "experiments/lan-connectivity",
     "experiments/acoustic-pairing"
-  ]
+  ],
+  "devDependencies": {
+    "selfsigned": "^5.5.0"
+  }
 }

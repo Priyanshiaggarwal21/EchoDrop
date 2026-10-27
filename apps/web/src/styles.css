@@ -1,45 +1,45 @@
-:root{font-family:'Segoe UI Variable Text','Segoe UI',system-ui,sans-serif;color:#1a1a1a;background:#f8f7f4;font-synthesis:none;
-  --canvas:#f8f7f4;
-  --surface:#efede8;
-  --surface-2:#e8e6e0;
-  --ink:#1a1a1a;
-  --ink-2:#111111;
-  --muted:#6b7280;
-  --muted-2:#9ca3af;
-  --line:#e2dfd8;
-  --line-2:#d1cec7;
-  --accent:#2563eb;
-  --accent-hover:#1d4ed8;
-  --accent-dim:#dbeafe;
-  --button:#2563eb;
-  --on-button:#ffffff;
-  --sage:#eff6ff;
+:root{font-family:'Segoe UI Variable Text','Segoe UI',system-ui,sans-serif;color:var(--ink);background:var(--canvas);font-synthesis:none;
+  --canvas:#F8F8F5;
+  --surface:#E9EFED;
+  --surface-2:#B4D0C8;
+  --ink:#202D30;
+  --ink-2:#202D30;
+  --muted:#526568;
+  --muted-2:#526568;
+  --line:#d4dfda;
+  --line-2:#a6bab6;
+  --accent:#205B65;
+  --accent-hover:#184952;
+  --accent-dim:#E9EFED;
+  --button:#205B65;
+  --on-button:#F8F8F5;
+  --sage:#B4D0C8;
   --bronze:#92400e;
-  --sidebar-bg:#f1f0ec;
-  --sidebar-active:#2563eb;
-  --sidebar-active-text:#ffffff;
+  --sidebar-bg:#E9EFED;
+  --sidebar-active:#205B65;
+  --sidebar-active-text:#F8F8F5;
   color-scheme:light
 }
 :root[data-theme=dark]{
-  --canvas:#111111;
-  --surface:#1c1c1c;
-  --surface-2:#242424;
-  --ink:#f0f0ee;
-  --ink-2:#ffffff;
-  --muted:#8a8a8a;
-  --muted-2:#6b6b6b;
-  --line:#2a2a2a;
-  --line-2:#333333;
-  --accent:#3b82f6;
-  --accent-hover:#2563eb;
-  --accent-dim:#1e3a5f;
-  --button:#3b82f6;
-  --on-button:#ffffff;
-  --sage:#1e2d3f;
+  --canvas:#101719;
+  --surface:#1C292C;
+  --surface-2:#344D51;
+  --ink:#EEF3F0;
+  --ink-2:#EEF3F0;
+  --muted:#adbfbc;
+  --muted-2:#adbfbc;
+  --line:#344D51;
+  --line-2:#587274;
+  --accent:#78ADA8;
+  --accent-hover:#94c4bf;
+  --accent-dim:#1C292C;
+  --button:#78ADA8;
+  --on-button:#101719;
+  --sage:#344D51;
   --bronze:#d97706;
-  --sidebar-bg:#161616;
-  --sidebar-active:#3b82f6;
-  --sidebar-active-text:#ffffff;
+  --sidebar-bg:#1C292C;
+  --sidebar-active:#78ADA8;
+  --sidebar-active-text:#101719;
   color-scheme:dark;
   color:var(--ink);
   background:var(--canvas)
@@ -140,7 +140,7 @@ aside nav button.active svg{stroke:var(--sidebar-active-text)}
 .workspace-label{font-size:11px;letter-spacing:.08em;color:var(--muted);font-weight:500;text-transform:uppercase}
 .service{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
 .service i{width:5px;height:5px;border-radius:50%;background:var(--bronze);flex-shrink:0}
-.service i.online{background:#22c55e}
+.service i.online{background:var(--accent)}
 
 /* Errors */
 .error{border-left:2px solid var(--bronze);background:var(--surface);padding:10px 12px;font-size:12px;text-align:left;overflow-wrap:anywhere;color:var(--ink);border-radius:0 4px 4px 0}
@@ -218,3 +218,83 @@ footer{padding:32px 5%;display:flex;align-items:center;justify-content:space-bet
   .search-input input{width:140px}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
+
+/* Shared interaction polish */
+:root {
+  --focus-ring: color-mix(in srgb, var(--accent) 72%, white);
+  --shadow-soft: 0 18px 48px color-mix(in srgb, var(--ink) 9%, transparent);
+}
+button, a, select, input, textarea, summary {
+  transition: border-color .18s ease, background-color .18s ease, color .18s ease,
+    box-shadow .18s ease, transform .18s ease, opacity .18s ease;
+}
+button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible,
+textarea:focus-visible, summary:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 1px var(--canvas);
+}
+button:not(:disabled):active, .button:not(:disabled):active {
+  transform: translateY(1px);
+}
+input::placeholder, textarea::placeholder {
+  color: var(--muted);
+  opacity: .78;
+}
+.error, .shell-notice, .project-error, .project-confirmation {
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 5%, transparent);
+}
+@media(max-width:480px) {
+  .header-end { width:100%; margin-left:0; justify-content:space-between; }
+  .header-end .connection-chip, .header-end .transfer-chip { flex:1 1 auto; min-width:0; }
+}
+@media(max-width:380px) {
+  .topbar { align-items:flex-start; }
+  .topbar .wordmark { padding-top:6px; }
+  .header-end { gap:8px; }
+  .header-end>.text-link { padding-inline:2px; }
+  .connection-chip, .transfer-chip { padding-inline:9px; }
+}
+
+
+/* Theme toggle button (sun/moon) */
+.theme-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background .18s, border-color .18s, color .18s;
+}
+.theme-toggle-btn:hover {
+  background: var(--surface);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.theme-toggle-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 50%;
+}
+
+/* Settings appearance group: toggle + select together */
+.settings-appearance-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.settings-appearance-group select {
+  font-size: 12px;
+  min-height: 0;
+  padding: 5px 8px;
+}

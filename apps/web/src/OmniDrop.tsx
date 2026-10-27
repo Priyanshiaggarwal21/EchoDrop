@@ -5,23 +5,24 @@ import { ProjectShare } from './ProjectShare';
 import { withSharingCheck, type ScanResult } from '../../../packages/transfer/secret-scan.mjs';
 
 type Phase = 'Checking' | 'Preparing' | 'Uploading' | 'Verifying' | 'Completed' | 'Interrupted' | 'Resumable' | 'Failed';
-type Record = { id: string; key: string; name: string; size: number; retained: number; phase: Phase; note: string; restart?: boolean; creating?: boolean };
+export type ActivityRecord = { updatedAt?: number | undefined; id: string; key: string; name: string; size: number; retained: number; phase: Phase; note: string; restart?: boolean; creating?: boolean };
 type Device = { id: string; deviceName: string; expiresAt: number };
 const journal = 'echodrop:omni:records:v1';
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-function readRecords(): Record[] {
+function readRecords(): ActivityRecord[] {
   try {
     const values: unknown = JSON.parse(localStorage.getItem(journal) || '[]');
     if (!Array.isArray(values)) return [];
     return values
-      .filter((r): r is Record =>
+      .filter((r): r is ActivityRecord =>
         r && idPattern.test(r.id) && typeof r.key === 'string' && r.key.startsWith('echodrop:transfer:') &&
         typeof r.name === 'string' && Number.isSafeInteger(r.size) && r.size >= 0 && r.size <= LIMIT)
       .slice(0, 100)
       .map(r => ({
         ...r,
         phase: 'Checking' as Phase,
+        updatedAt: typeof r.updatedAt === 'number' && Number.isFinite(r.updatedAt) && r.updatedAt > 0 && r.updatedAt < 8640000000000000 ? r.updatedAt : undefined,
         retained: Number.isSafeInteger(r.retained) && r.retained >= 0 && r.retained <= r.size ? r.retained : 0,
         note: 'Last acknowledged bytes shown; checking persisted transfer with the host.'
       }));
@@ -66,16 +67,18 @@ function PlusIcon() {
 }
 
 export function OmniDrop({
-  api, view, devices, download, onComplete, onActiveChange
+  api, view, devices, download, onComplete, onActiveChange, onSummary, mode = 'files'
 }: {
   api: Transport;
-  view: 'Files' | 'Transfers';
+  view: 'Share' | 'Receive' | 'Activity' | 'Home' | 'Workspace' | 'Connect' | 'Settings';
+  mode?: 'files' | 'project';
+  onSummary?: (records: ActivityRecord[], phase: string) => void;
   devices?: Device[];
   download?: (path: string) => Promise<void>;
   onComplete?: () => void;
   onActiveChange?: (active: boolean) => void
 }) {
-  const [records, setRecords] = useState<Record[]>(readRecords);
+  const [records, setRecords] = useState<ActivityRecord[]>(readRecords);
   const recordsRef = useRef(records);
   const [selected, setSelected] = useState<File | null>(null);
   const [active, setActive] = useState(false);
@@ -86,7 +89,7 @@ export function OmniDrop({
   const [dragging, setDragging] = useState(false);
   const depth = useRef(0);
   const input = useRef<HTMLInputElement>(null);
-  const resumeTarget = useRef<Record | undefined>(undefined);
+  const resumeTarget = useRef<ActivityRecord | undefined>(undefined);
   const [files, setFiles] = useState<{ name: string; path: string }[]>([]);
   const [filesLoaded, setFilesLoaded] = useState(false);
   const [fileError, setFileError] = useState('');
@@ -104,14 +107,18 @@ export function OmniDrop({
     if (!allow) { setSelected(null); setPhase('Sharing cancelled. No new file bytes were uploaded.'); }
     resolve?.(allow);
   }
+  useEffect(() => { onSummary?.(records, phase); }, [records, phase, onSummary]);
   const fileCache = useRef(new Map<string, File>());
 
-  function persist(next: Record[]) {
+  function persist(next: ActivityRecord[]) {
     recordsRef.current = next; setRecords(next);
     try { localStorage.setItem(journal, JSON.stringify(next)); }
     catch { setStorageWarning('Browser storage is unavailable. Keep this window open to retain resume references.'); }
   }
-  function update(record: Record) { persist([record, ...recordsRef.current.filter(r => r.id !== record.id)]); }
+  function update(record: ActivityRecord) {
+    const previous = recordsRef.current;
+    persist(previous.some(r => r.id === record.id) ? previous.map(r => r.id === record.id ? record : r) : [record, ...previous]);
+  }
   function remember(key: string, id: string) {
     try { localStorage.setItem(key, id); }
     catch { setStorageWarning('Resume is available in this window only; browser storage could not be saved.'); }
@@ -128,7 +135,7 @@ export function OmniDrop({
     } catch (e) { setFileError((e as Error).message); }
   }
 
-  function fromServer(record: Record, state: Transfer): Record {
+  function fromServer(record: ActivityRecord, state: Transfer): ActivityRecord {
     return {
       ...record,
       creating: false,
@@ -204,10 +211,10 @@ export function OmniDrop({
     if (target) { resumeTarget.current = undefined; void send(file, target, target.restart); }
   }
 
-  async function send(file: File, target?: Record, startNew = false) {
+  async function send(file: File, target?: ActivityRecord, startNew = false) {
     if (lock.current || reconciling.current) return;
     lock.current = true; setActive(true); onActiveChange?.(true); setMessage(''); setPhase('Checking file locally for sensitive content');
-    let current: Record | undefined = target;
+    let current: ActivityRecord | undefined = target;
     let state: Transfer | undefined;
     let key = '';
     try {
@@ -230,12 +237,12 @@ export function OmniDrop({
       } else {
         const id = !startNew && current?.creating ? current.id : newTransferId();
         const previous = target;
-        current = { id, key, name: file.name, size: file.size, retained: 0, phase: 'Preparing', creating: true, note: 'Creation not yet confirmed. Retry will reuse this transfer ID.' };
+        current = { id, key, name: file.name, size: file.size, retained: 0, updatedAt: Date.now(), phase: 'Preparing', creating: true, note: 'Creation not yet confirmed. Retry will reuse this transfer ID.' };
         if (startNew && previous) persist(recordsRef.current.filter(r => r.id !== previous.id));
         remember(key, id); update(current); fileCache.current.set(id, file);
         state = await request(api, { path: '/transfers', method: 'POST', headers: { ...headers, 'X-Transfer-ID': id } });
       }
-      current = { id: state.id, key, name: file.name, size: file.size, retained: state.retainedBytes, phase: 'Uploading', note: 'Transferring to the host workspace. Progress counts acknowledged bytes.' };
+      current = { id: state.id, key, name: file.name, size: file.size, retained: state.retainedBytes, updatedAt: current?.updatedAt || Date.now(), phase: 'Uploading', note: 'Transferring to the host workspace. Progress counts acknowledged bytes.' };
       if (startNew && target) persist(recordsRef.current.filter(r => r.id !== target.id));
       remember(key, state.id); fileCache.current.set(state.id, file); update(current);
       while (state.state !== 'completed' && state.nextIndex * state.chunkSize < file.size) {
@@ -257,7 +264,7 @@ export function OmniDrop({
     } catch (error) {
       setPhase('Upload needs attention');
       if (current) {
-        let record: Record = { ...current, phase: error instanceof TransferError && [410, 422].includes(error.status) ? 'Failed' : 'Interrupted', note: recovery(error), restart: error instanceof TransferError && ([410, 422].includes(error.status) || (!current.creating && error.status === 404)) };
+        let record: ActivityRecord = { ...current, phase: error instanceof TransferError && [410, 422].includes(error.status) ? 'Failed' : 'Interrupted', note: recovery(error), restart: error instanceof TransferError && ([410, 422].includes(error.status) || (!current.creating && error.status === 404)) };
         try {
           const confirmed = await request(api, { path: '/transfers/' + current.id });
           record = fromServer(record, confirmed);
@@ -270,7 +277,7 @@ export function OmniDrop({
     } finally { lock.current = false; setActive(false); onActiveChange?.(false); }
   }
 
-  function resume(record: Record) {
+  function resume(record: ActivityRecord) {
     const cached = fileCache.current.get(record.id);
     if (cached) { void send(cached, record, record.restart); return; }
     resumeTarget.current = record;
@@ -338,9 +345,9 @@ export function OmniDrop({
       )}
 
       {/* ── Files view ── */}
-      <div hidden={view !== 'Files'}><ProjectShare disabled={active || checking} receiveRequest={receiveRequest} onShare={file => { setSelected(file); resumeTarget.current = undefined; void send(file); }} /></div>
+      <div hidden={!((view === 'Share' && mode === 'project') || view === 'Receive')}><ProjectShare onInvalidate={() => { if (selected?.name.endsWith('.echoproject')) { setSelected(null); setPhase('Project changed. Prepare a new package before sending.'); } }} mode={view === 'Receive' ? 'receive' : 'share'} disabled={active || checking} receiveRequest={receiveRequest} onShare={file => { setSelected(file); resumeTarget.current = undefined; setPhase('Package prepared. Review the destination and select Send.'); }} /></div>
 
-      {(view === 'Files' || selected) && (
+      {view === 'Share' && (mode === 'files' || selected) && (
         <>
           {/* Drop zone / selected file */}
           {!selected ? (
@@ -392,11 +399,12 @@ export function OmniDrop({
         </>
       )}
 
-      {view === 'Files' && (
+      {view === 'Receive' && (
         <>
+          <section className="incoming-panel"><h3>Incoming</h3><p>Files appear below after the host verifies completion. This service does not expose other devices’ in-progress uploads, sender details or per-file approvals.</p><p className="fine">Device approval is managed in Connect Device. Refresh to check for completed transfers.</p>{!window.echoDesktop && <p className="fine">On mobile, download .echoproject packages and extract them in EchoDrop desktop. Native extraction and Open Folder are unavailable here.</p>}</section>
           {/* Shared files table */}
           <div className="shared-heading">
-            <h3>Shared files <span>{filesLoaded ? files.length : '…'}</span></h3>
+            <h3>Received <span>{filesLoaded ? files.length : '…'}</span></h3>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div className="search-input">
                 <SearchIcon />
@@ -421,7 +429,7 @@ export function OmniDrop({
           {filesLoaded && (
             files.length === 0 ? (
               <div style={{ padding: '0 28px 20px' }}>
-                <p className="fine">No shared files on the host yet. Add the first one above.</p>
+                <p className="fine">No completed files in this workspace yet. Verified transfers appear here.</p>
               </div>
             ) : filteredFiles.length === 0 ? (
               <div style={{ padding: '0 28px 20px' }}>
@@ -450,7 +458,7 @@ export function OmniDrop({
                           </td>
                           <td className="col-muted">{ext}</td>
                           <td className="col-action">
-                            {f.name.toLowerCase().endsWith('.echoproject') && window.echoDesktop?.project && <button disabled={active || checking} onClick={() => setReceiveRequest({ path: f.path })}>Receive project</button>}
+                            {f.name.toLowerCase().endsWith('.echoproject') && window.echoDesktop?.project && <button disabled={active || checking} onClick={() => setReceiveRequest({ path: f.path })}>Extract project</button>}
 
                             {download
                               ? <button onClick={() => void getFile(f.path)}>Download</button>
@@ -469,31 +477,29 @@ export function OmniDrop({
       )}
 
       {/* ── Transfers view: empty state or upload prompt ── */}
-      {view === 'Transfers' && !selected && records.length === 0 && (
+      {view === 'Activity' && records.length === 0 && (
         <div className="activity-empty">
           <h2>Nothing in transit.</h2>
           <p>Real transfer activity appears here after the host accepts a file.</p>
-          <button className="button" disabled={active} onClick={() => { resumeTarget.current = undefined; input.current?.click(); }}>
-            <PlusIcon /> Choose a file
-          </button>
+          <p className="fine">Open Share to prepare your first transfer.</p>
         </div>
       )}
 
       {/* ── Transfer activity (shown in both views) ── */}
-      {records.length > 0 && (
+      {(view === 'Activity' ? records.length > 0 : view === 'Share' && records.some(r => r.phase !== 'Completed')) && (
         <section className="transfer-activity" aria-label="Transfer activity">
           <div className="shared-heading">
-            <h3>{view === 'Transfers' ? 'Transfers' : 'Your activity'}</h3>
+            <h3>{view === 'Activity' ? 'Recent Activity' : 'Transfer status'}</h3>
             <span className="fine">Started in this client · no delivery receipts</span>
           </div>
-          {records.map(record => (
+          {(view === 'Activity' ? records : records.filter(r => r.phase !== 'Completed')).map(record => (
             <article className="transfer-row" key={record.id}>
               <div className="transfer-title">
                 <div>
                   <h3>{record.name}</h3>
-                  <p>{bytes(record.size)} → Host workspace · all approved members</p>
+                  <p>{record.updatedAt && <time dateTime={new Date(record.updatedAt).toISOString()}>{new Date(record.updatedAt).toLocaleString()} · </time>}{bytes(record.size)} → Host workspace · all approved members</p>
                 </div>
-                <strong className={'transfer-state state-' + record.phase.toLowerCase()}>{record.phase}</strong>
+                <strong className={'transfer-state state-' + record.phase.toLowerCase()}>{record.phase === 'Uploading' ? 'Transferring' : record.phase}</strong>
               </div>
               <progress
                 value={record.retained} max={record.size || 1}
